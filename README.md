@@ -1,15 +1,13 @@
-# pi-extensions
+# Pi Extensions
 
-A collection of extensions for the coding agent [Pi](https://pi.dev/).
+A collection of the extensions i have made for the coding agent [Pi](https://pi.dev/).
 
 ## Packages
 
-| Package | What it does |
-| --- | --- |
-| [`extensions/branch-context`](extensions/branch-context/) — **pi-branch-context** | Keeps LLM work scoped to the current git branch: injects a branch scope context file (`.pi/branches/<branch>.md`) into the prompt and gates out-of-scope implementation work behind a blocking "implement here / separate branch" user choice dialog. |
+### [Branch Context](extensions/branch-context/)
 
-## Development
+**What it does:**
+Keeps LLM work scoped to the current git branch: injects a branch scope context file (`.pi/branches/<branch>.md`) into the prompt and gates out-of-scope implementation work behind a blocking "implement here / separate branch" user choice dialog.
 
-Each package under `extensions/` is a standalone pi package (own `package.json` with a `pi`
-manifest entry). Local install for testing: symlink the package's extension file into
-`~/.pi/agent/extensions/` and `/reload` pi. Publishing: `npm publish` from the package dir.
+**Reason:**
+I often found myself constantly having to explain to the agent what this branch was about and the commits so far on the branch whenever i wanted it to work on a branch. This extension prevents the repetitiveness of writing context, and i can therefore focus on explaining the feature of fix i need help with.  
