@@ -1,0 +1,48 @@
+{
+  "name": "pi-mentions",
+  "version": "0.1.0",
+  "description": "Typed references in a Pi prompt that expand into real context: @uncommitted and @<hash> inject git state and commit contents, # autocompletes GitHub issues and injects their bodies and comment threads.",
+  "type": "module",
+  "license": "BSD-3-Clause",
+  "author": "Matthias Schoenning Nielsen",
+  "homepage": "https://github.com/Mattschoe/pi-extensions/tree/main/extensions/pi-mentions",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Mattschoe/pi-extensions.git",
+    "directory": "extensions/pi-mentions"
+  },
+  "bugs": {
+    "url": "https://github.com/Mattschoe/pi-extensions/issues"
+  },
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "pi",
+    "pi-coding-agent",
+    "extension",
+    "git",
+    "diff",
+    "commit",
+    "github",
+    "issues",
+    "autocomplete",
+    "mentions"
+  ],
+  "files": [
+    "extensions",
+    "README.md",
+    "LICENSE"
+  ],
+  "pi": {
+    "extensions": [
+      "./extensions"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
