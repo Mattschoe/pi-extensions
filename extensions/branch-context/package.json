@@ -1,6 +1,6 @@
 {
   "name": "pi-branch-context",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Keeps LLM work scoped to the current git branch: injects a branch scope context file (.pi/branches/<branch>.md) into the prompt and gates out-of-scope implementation work behind a blocking user choice dialog.",
   "type": "module",
   "license": "BSD-3-Clause",
@@ -8,7 +8,8 @@
   "homepage": "https://github.com/Mattschoe/pi-extensions/tree/main/extensions/branch-context",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Mattschoe/pi-extensions.git"
+    "url": "git+https://github.com/Mattschoe/pi-extensions.git",
+    "directory": "extensions/branch-context"
   },
   "bugs": {
     "url": "https://github.com/Mattschoe/pi-extensions/issues"
