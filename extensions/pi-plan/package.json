@@ -1,6 +1,6 @@
 {
   "name": "@mattschoe/pi-plan",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Plan mode, accept-edits mode and plan execution tracking for Pi: cycle permission modes, capture the plan to .pi/plans, hand it to a fresh chat, and tick off steps against Done-When criteria.",
   "type": "module",
   "license": "MIT",
