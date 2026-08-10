@@ -5,9 +5,9 @@ A collection of the extensions i have made for the coding agent [Pi](https://pi.
 ## Index
 | Extension | What it does |
 | --------- | ------------ |
-| [Branch Context](https://github.com/Mattschoe/pi-extensions/edit/feat/pi-plan/README.md#branch-context) | Keeps LLM work scoped to the current git branch: injects a branch scope context file <br>(`.pi/branches/<branch>.md`) into the prompt and gates out-of-scope implementation work |
-| [GitHub- & Git Mentions](https://github.com/Mattschoe/pi-extensions/edit/feat/pi-plan/README.md#github---git-mentions) | Adds the ability to `@mention` a lot of different Git and Github items, such as: <br> GH issues, whole commits, and uncommited work |
-| [Plan & Auto-accept Mode](https://github.com/Mattschoe/pi-extensions/edit/feat/pi-plan/README.md#plan--auto-accept-mode) | A classic planning & auto-accept mode you know and love from Claude Code. <br> This is however with a bunch of extra features added on top, features such as: <br> - Improved plan document structure <br> - `Implement in new chat` option <br> - Proper naming of plan files <br> - `/plans` browser <br> - Visual Execution Tracking (TODO boxes) | 
+| [Branch Context](#branch-context) | Keeps LLM work scoped to the current git branch: injects a branch scope context file <br>(`.pi/branches/<branch>.md`) into the prompt and gates out-of-scope implementation work |
+| [GitHub- & Git Mentions](#github---git-mentions) | Adds the ability to `@mention` a lot of different Git and Github items, such as: <br> GH issues, whole commits, and uncommited work |
+| [Plan & Auto-accept Mode](#plan--auto-accept-mode) | A classic planning & auto-accept mode you know and love from Claude Code. <br> This is however with a bunch of extra features added on top, features such as: <br> - Improved plan document structure <br> - `Implement in new chat` option <br> - Proper naming of plan files <br> - `/plans` browser <br> - Visual Execution Tracking (TODO boxes) | 
 
 
 ## Packages
