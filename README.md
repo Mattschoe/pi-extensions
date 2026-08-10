@@ -10,6 +10,7 @@ A collection of the extensions i have made for the coding agent [Pi](https://pi.
 | [Plan & Auto-accept Mode](#plan--auto-accept-mode) | A classic planning & auto-accept mode you know and love from Claude Code. <br> This is however with a bunch of extra features added on top, features such as: <br> - Improved plan document structure <br> - `Implement in new chat` option <br> - Proper naming of plan files <br> - `/plans` browser <br> - Visual Execution Tracking (TODO boxes) | 
 | [Oneline Tools](#oneline-tools) | Renders `read`, `grep`, `find`, `ls`, `bash` as one dim line instead of a bordered box |
 | [Auto Name Session](#auto-name-session) | Names an unnamed session from your first prompt |
+| [Skills Manager](#skills-manager) | Adds the `/skills` command to view and toggle skills |
 
 ## Packages
 
@@ -73,3 +74,15 @@ Gives an unnamed session a short, descriptive name based on your first prompt.
 
 #### Reason
 Its annoying to name each session, and even more annoying to try and find a chat when you have a list full on `unnamed` sessions. 
+
+### [Skills Manager](extensions/pi-skill-manager/)
+#### What it does
+Adds the `/skills` command, opening an overview menu of skills. 
+In the menu you can then toggle each skill between **visible** and **hidden**.
+
+#### Reason
+Skills are cheap to install and not cheap to carry. Every visible skill puts its name and description
+in the system prompt of every turn, and a dozen of them the model rarely wants is a dozen chances to
+be distracted by the wrong one. Hiding a skill removes it from the system prompt while leaving it
+installed and loadable on demand, so a rarely-used skill costs nothing until you ask for it. 
+Pi doesn't make it easy to enable/disable skills, so therefore this extension.
