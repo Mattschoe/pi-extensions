@@ -8,7 +8,7 @@ A collection of the extensions i have made for the coding agent [Pi](https://pi.
 | [Branch Context](#branch-context) | Keeps LLM work scoped to the current git branch: injects a branch scope context file <br>(`.pi/branches/<branch>.md`) into the prompt and gates out-of-scope implementation work |
 | [GitHub- & Git Mentions](#github---git-mentions) | Adds the ability to `@mention` a lot of different Git and Github items, such as: <br> GH issues, whole commits, and uncommited work |
 | [Plan & Auto-accept Mode](#plan--auto-accept-mode) | A classic planning & auto-accept mode you know and love from Claude Code. <br> This is however with a bunch of extra features added on top, features such as: <br> - Improved plan document structure <br> - `Implement in new chat` option <br> - Proper naming of plan files <br> - `/plans` browser <br> - Visual Execution Tracking (TODO boxes) | 
-| [Oneline Tools](#oneline-tool-usage) | Renders `read`, `grep`, `find`, `ls`, `bash` as one dim line instead of a bordered box |
+| [Oneline Tools](#oneline-tools) | Renders `read`, `grep`, `find`, `ls`, `bash` as one dim line instead of a bordered box |
 
 ## Packages
 
