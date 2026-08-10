@@ -9,6 +9,7 @@ A collection of the extensions i have made for the coding agent [Pi](https://pi.
 | [GitHub- & Git Mentions](#github---git-mentions) | Adds the ability to `@mention` a lot of different Git and Github items, such as: <br> GH issues, whole commits, and uncommited work |
 | [Plan & Auto-accept Mode](#plan--auto-accept-mode) | A classic planning & auto-accept mode you know and love from Claude Code. <br> This is however with a bunch of extra features added on top, features such as: <br> - Improved plan document structure <br> - `Implement in new chat` option <br> - Proper naming of plan files <br> - `/plans` browser <br> - Visual Execution Tracking (TODO boxes) | 
 | [Oneline Tools](#oneline-tools) | Renders `read`, `grep`, `find`, `ls`, `bash` as one dim line instead of a bordered box |
+| [Auto Name Session](#auto-name-session) | Names an unnamed session from your first prompt |
 
 ## Packages
 
@@ -65,3 +66,10 @@ Renders `read`, `grep`, `find`, `ls` and `bash` as one dim line each instead of 
 #### Reason
 Its incredibly annoying to see so much popup in the TUI when the agent is just reading files, 
 this removes clutter and makes it easier to focus on writes.
+
+### [Auto Name Session](extensions/pi-auto-name-session/)
+#### What it does
+Gives an unnamed session a short, descriptive name based on your first prompt.
+
+#### Reason
+Its annoying to name each session, and even more annoying to try and find a chat when you have a list full on `unnamed` sessions. 

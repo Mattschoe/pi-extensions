@@ -1,0 +1,44 @@
+{
+  "name": "pi-auto-name-session",
+  "version": "0.1.0",
+  "description": "Automatically names Pi sessions from the first user prompt by having the agent itself call a name_session tool, so an unnamed session gets a short descriptive title without a separate model request.",
+  "type": "module",
+  "license": "BSD-3-Clause",
+  "author": "Matthias Schoenning Nielsen",
+  "homepage": "https://github.com/Mattschoe/pi-extensions/tree/main/extensions/pi-auto-name-session",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Mattschoe/pi-extensions.git",
+    "directory": "extensions/pi-auto-name-session"
+  },
+  "bugs": {
+    "url": "https://github.com/Mattschoe/pi-extensions/issues"
+  },
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "pi",
+    "pi-coding-agent",
+    "extension",
+    "session",
+    "session-name",
+    "naming"
+  ],
+  "files": [
+    "extensions",
+    "README.md",
+    "LICENSE"
+  ],
+  "pi": {
+    "extensions": [
+      "./extensions"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
