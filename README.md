@@ -15,10 +15,14 @@ I often found myself constantly having to explain to the agent what this branch 
 ### [Github- & Git Mentions](extensions/pi-mentions/)
 
 #### What it does
-Adds the ability to `@mention` a lot of different Git and Github items that is useful for context in specific tasks. More specifically you can
-- `#<issue_number>` to inject a Github Issue and immediately begin implementing. If you check the commit you can open it in the browser with `alt+g`.
+Adds the ability to `@mention` a lot of different Git and Github items that is useful for context in specific tasks.
+More specifically you can
+- `#<issue_number>` to inject a Github Issue and immediately begin implementing. 
+  If you check the commit you can open it in the browser with `alt+g`.
 - `@<git_hash>` to inject a whole commit, useful for giving context for fixing or adding features.
 - `@uncommited` to inject all current uncommited changes
 
 #### Reason
-A lot of my work starts with "see issue XX on Github" or "Look at commit XXXXX, we need to modify XX to do XX" or "look at the uncommited changes, can you make sure that XX". All of it is me repeating myself all day long, this extension avoid the repetiveness and just focus on implementing while ensuring the agent gets the context it needs.
+A lot of my work starts with "see issue XX on Github" or "Look at commit XXXXX, we need to modify XX to do XX" or
+"look at the uncommited changes, can you make sure that XX". All of it is me repeating myself all day long,
+this extension avoid the repetiveness and just focus on implementing while ensuring the agent gets the context it needs.
