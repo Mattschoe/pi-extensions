@@ -178,7 +178,28 @@ function makeCtx(cwd, { hasUI = true, editorText = "", selectAnswer } = {}) {
       return typeof selectAnswer === "function" ? selectAnswer(options) : selectAnswer;
     },
   };
-  return { cwd, hasUI, ui };
+  // Pi's runner marks every ctx it handed out stale once the session is
+  // replaced, and throws from the `ui` getter afterwards. `invalidate()`
+  // reproduces that, and `staleAccesses` counts anything that ignored it.
+  let stale = false;
+  let staleAccesses = 0;
+  return {
+    cwd,
+    hasUI,
+    get ui() {
+      if (stale) {
+        staleAccesses++;
+        throw new Error("This extension ctx is stale after session replacement or reload.");
+      }
+      return ui;
+    },
+    invalidate: () => {
+      stale = true;
+    },
+    get staleAccesses() {
+      return staleAccesses;
+    },
+  };
 }
 
 /** Stands in for pi's built-in `@` file picker, which our provider wraps. */
@@ -724,6 +745,86 @@ check(
   noRef.ui.selectPrompts[0].options.length === ISSUES.length,
   `${noRef.ui.selectPrompts[0]?.options.length}`,
 );
+
+// ---------------------------------------------------------------------------
+// Session replacement (/new, /resume, fork, reload)
+// ---------------------------------------------------------------------------
+//
+// Pi tears the session down, then marks every ctx it handed out stale. Our two
+// callers that outlive that moment — the editor's post-keystroke timer and an
+// in-flight `gh issue list` — must stop using the captured ctx, because a throw
+// from a timer or a floating promise is a fatal uncaughtException for pi.
+
+section("session replacement");
+
+const tick = () => new Promise((resolve) => setTimeout(resolve, 5));
+const stubTui = { requestRender() {} };
+const stubKeybindings = { matches: () => false };
+// The hint renders through pi's theme, which the host normally initializes.
+const { initTheme } = await import(pathToFileURL(join(PI_DIR, "dist", "index.js")).href);
+initTheme("dark");
+
+const piReplaced = makeFakePi(ghWorking());
+factory(piReplaced);
+const replacedCtx = makeCtx(REPO, { editorText: "fix [#412 - Login crashes on empty password]" });
+await piReplaced.handler("session_start")({ type: "session_start" }, replacedCtx);
+
+const editor = replacedCtx.ui.editorFactories[0](stubTui, {}, stubKeybindings);
+editor.handleInput("x");
+await tick();
+check("the hint refreshes while the session is live", replacedCtx.ui.widgets.length > 0);
+
+// Held across the invalidation so the assertions below can still read what the
+// extension did (or did not) do to the UI it can no longer legally reach.
+const replacedUi = replacedCtx.ui;
+
+// Teardown order pi uses: session_shutdown first, invalidation right after.
+await piReplaced.handler("session_shutdown")?.({ type: "session_shutdown", reason: "new" });
+replacedCtx.invalidate();
+
+const widgetsAtShutdown = replacedUi.widgets.length;
+let crashed;
+const catchCrash = (error) => {
+  crashed = error;
+};
+process.on("uncaughtException", catchCrash);
+try {
+  editor.handleInput("y");
+} catch (error) {
+  crashed = error;
+}
+await tick();
+process.off("uncaughtException", catchCrash);
+check(
+  "a keystroke after the session is replaced does not crash pi",
+  crashed === undefined,
+  crashed?.message,
+);
+check("and does not touch the stale ctx", replacedCtx.staleAccesses === 0);
+check("leaving pi's own widget cleanup alone", replacedUi.widgets.length === widgetsAtShutdown);
+
+// The issue list warms in the background at session_start; landing after the
+// replacement must not notify through the dead ctx either.
+let releaseIssueList;
+const ghSlowList = (args) => {
+  if (args[0] === "auth") return { stdout: "Logged in", stderr: "", code: 0, killed: false };
+  if (args[0] === "issue" && args[1] === "list") {
+    return new Promise((resolve) => {
+      releaseIssueList = () => resolve({ stdout: "", stderr: "gh died", code: 1, killed: false });
+    });
+  }
+  return { stdout: "", stderr: `unexpected gh ${args.join(" ")}`, code: 1, killed: false };
+};
+
+const piInflight = makeFakePi(ghSlowList);
+factory(piInflight);
+const inflightCtx = makeCtx(REPO);
+await piInflight.handler("session_start")({ type: "session_start" }, inflightCtx);
+await piInflight.handler("session_shutdown")?.({ type: "session_shutdown", reason: "new" });
+inflightCtx.invalidate();
+releaseIssueList();
+await tick();
+check("an issue load that lands after the replacement stays quiet", inflightCtx.staleAccesses === 0);
 
 // ---------------------------------------------------------------------------
 // Summary

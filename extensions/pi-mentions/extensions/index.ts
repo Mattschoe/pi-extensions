@@ -871,7 +871,15 @@ class MentionsEditor extends CustomEditor {
 		// opens does not exist yet above. The issue list is cached after the
 		// first load, making that chain pure microtasks — settled well before a
 		// zero-delay timer.
-		setTimeout(() => this.onSelectionMaybeChanged?.(), 0);
+		setTimeout(() => {
+			try {
+				this.onSelectionMaybeChanged?.();
+			} catch {
+				// A hint refresh is never worth a crash, and a throw out of a
+				// timer is fatal to pi. The realistic cause is a session
+				// replaced between the keystroke and this tick.
+			}
+		}, 0);
 	}
 }
 
@@ -1030,11 +1038,41 @@ export default function (pi: ExtensionAPI): void {
 	let loadSuccessShown = false;
 
 	// -----------------------------------------------------------------------
+	// Session lifetime
+	// -----------------------------------------------------------------------
+	//
+	// Pi invalidates every ctx it handed out when the session is replaced
+	// (`/new`, `/resume`, fork, reload) — touching `ctx.ui` afterwards throws.
+	// Two of our callers outlive the session: the editor's post-keystroke timer
+	// (a `/new` submitted from the editor lands in exactly that window) and the
+	// in-flight `gh issue list`. Both would throw from a timer or a floating
+	// promise, which pi has nowhere to catch and turns into a fatal
+	// uncaughtException. `session_shutdown` fires before the invalidation, so
+	// flipping this flag there is enough to make them stand down in time.
+
+	let sessionActive = true;
+
+	pi.on("session_shutdown", () => {
+		sessionActive = false;
+		if (mentionsEditor) mentionsEditor.onSelectionMaybeChanged = undefined;
+		mentionsEditor = undefined;
+	});
+
+	// -----------------------------------------------------------------------
 	// session_start: probe capabilities, register the mention providers
 	// -----------------------------------------------------------------------
 
 	pi.on("session_start", async (_event, ctx) => {
+		// A fresh session gets a fresh extension instance today, so this is only
+		// belt and braces — but a reused instance must not stay shut down.
+		sessionActive = true;
 		const cwd = ctx.cwd;
+
+		/** `ctx.ui` is only safe while this session still owns the UI. */
+		const notify = (message: string, level: "info" | "error"): void => {
+			if (!sessionActive) return;
+			ctx.ui.notify(message, level);
+		};
 
 		// `@` first, and never gated on anything GitHub-related: a plain git
 		// repo with no remote and no `gh` installed must still get `@`.
@@ -1077,7 +1115,7 @@ export default function (pi: ExtensionAPI): void {
 					if (!loadErrorShown) {
 						loadErrorShown = true;
 						const details = result.stderr.trim() || `exit code ${result.code}`;
-						ctx.ui.notify(`mentions: failed to load issues: ${details}`, "error");
+						notify(`mentions: failed to load issues: ${details}`, "error");
 					}
 					return undefined;
 				}
@@ -1086,16 +1124,13 @@ export default function (pi: ExtensionAPI): void {
 					loadedIssues = issues;
 					if (!loadSuccessShown && issues.length > 0) {
 						loadSuccessShown = true;
-						ctx.ui.notify(
-							`mentions: ${issues.length} open issues loaded from ${repo}`,
-							"info",
-						);
+						notify(`mentions: ${issues.length} open issues loaded from ${repo}`, "info");
 					}
 					return issues;
 				} catch {
 					if (!loadErrorShown) {
 						loadErrorShown = true;
-						ctx.ui.notify("mentions: failed to parse gh issue list output", "error");
+						notify("mentions: failed to parse gh issue list output", "error");
 					}
 					return undefined;
 				}
@@ -1194,6 +1229,9 @@ export default function (pi: ExtensionAPI): void {
 	 * something: an issue highlighted in the popup, or referenced in the prompt.
 	 */
 	const refreshOpenIssueHint = (ctx: ExtensionContext): void => {
+		// Reached from a timer after the session was torn down: the ctx is stale
+		// and the widget belongs to a UI pi has already cleared.
+		if (!sessionActive) return;
 		const applies =
 			issueRepo !== undefined &&
 			(highlightedIssueNumber() !== undefined ||
