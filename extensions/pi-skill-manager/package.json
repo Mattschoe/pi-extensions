@@ -1,6 +1,6 @@
 {
   "name": "pi-skill-manager",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "A /skills browser for Pi that toggles a skill between visible and hidden by writing disable-model-invocation into its SKILL.md frontmatter, keeping it loadable on demand while it is out of the system prompt.",
   "type": "module",
   "license": "BSD-3-Clause",
