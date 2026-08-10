@@ -1,6 +1,6 @@
 {
   "name": "pi-auto-name-session",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Automatically names Pi sessions from the first user prompt by having the agent itself call a name_session tool, so an unnamed session gets a short descriptive title without a separate model request.",
   "type": "module",
   "license": "BSD-3-Clause",
