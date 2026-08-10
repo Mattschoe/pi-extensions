@@ -1,6 +1,6 @@
 {
   "name": "pi-mentions",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Typed references in a Pi prompt that expand into real context: @uncommitted and @<hash> inject git state and commit contents, # autocompletes GitHub issues and injects their bodies and comment threads.",
   "type": "module",
   "license": "BSD-3-Clause",
