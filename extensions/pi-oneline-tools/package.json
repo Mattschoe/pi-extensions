@@ -1,0 +1,45 @@
+{
+  "name": "pi-oneline-tools",
+  "version": "0.1.0",
+  "description": "Renders Pi's read/grep/find/ls/bash tool calls as a single dim line each instead of a bordered box, with the full output one keypress away.",
+  "type": "module",
+  "license": "BSD-3-Clause",
+  "author": "Matthias Schoenning Nielsen",
+  "homepage": "https://github.com/Mattschoe/pi-extensions/tree/main/extensions/pi-oneline-tools",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Mattschoe/pi-extensions.git",
+    "directory": "extensions/pi-oneline-tools"
+  },
+  "bugs": {
+    "url": "https://github.com/Mattschoe/pi-extensions/issues"
+  },
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "pi",
+    "pi-coding-agent",
+    "extension",
+    "tui",
+    "renderer",
+    "compact",
+    "output"
+  ],
+  "files": [
+    "extensions",
+    "README.md",
+    "LICENSE"
+  ],
+  "pi": {
+    "extensions": [
+      "./extensions"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
