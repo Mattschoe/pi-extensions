@@ -442,10 +442,27 @@ section("Plan capture — option 1 (execute here) and tracking");
   const tracking = pi.entries.filter((e) => e.customType === "plan-mode").at(-1);
   check("tracking state has both steps", tracking?.data.todos.length === 2);
   check("tracking state captured Done When", Boolean(tracking?.data.doneWhenText));
-  check("kickoff message was sent", pi.sent.some((s) => s.kind === "user" && s.text.includes("Start with step 1")));
+  check(
+    "kickoff is not queued into the ending plan-mode run",
+    !pi.sent.some((s) => s.kind === "user" && s.text.includes("Start with step 1")),
+  );
 
-  // Execution context is injected while steps remain
+  await pi.emit("agent_settled", {}, ctx);
+  const kickoffMessages = pi.sent.filter(
+    (s) => s.kind === "user" && s.text.includes("Start with step 1"),
+  );
+  check("agent_settled sends the kickoff", kickoffMessages.length === 1);
+  check("kickoff starts a fresh run without deliverAs", kickoffMessages[0]?.options === undefined);
+  await pi.emit("agent_settled", {}, ctx);
+  check(
+    "a later agent_settled does not duplicate the kickoff",
+    pi.sent.filter((s) => s.kind === "user" && s.text.includes("Start with step 1")).length === 1,
+  );
+
+  // A fresh before_agent_start rebuilds both permission and execution context.
   const [beforeStart] = await pi.emit("before_agent_start", { systemPrompt: "BASE" }, ctx);
+  check("fresh kickoff uses accept-edits prompt", beforeStart.systemPrompt?.includes("[ACCEPT EDITS MODE]"));
+  check("fresh kickoff no longer uses plan-mode prompt", !beforeStart.systemPrompt?.includes("[PLAN MODE ACTIVE]"));
   check("execution context is injected", beforeStart.message?.customType === "plan-execution-context");
   check("execution context lists remaining steps", beforeStart.message?.content.includes("[DONE:n]"));
 
@@ -461,13 +478,19 @@ section("Plan capture — option 1 (execute here) and tracking");
   await pi.emit("agent_end", { messages: [] }, ctx);
   check("no verification while steps remain", !pi.sent.some((s) => s.kind === "user" && s.text.includes("verify against")));
 
-  // Step 2 done -> verification fires
+  // Step 2 done -> verification waits for a fresh run too
   await pi.emit("turn_end", { message: assistant("And the other. [DONE:2]") }, ctx);
   await pi.emit("agent_end", { messages: [] }, ctx);
   check(
-    "verification prompt fires once all steps are done",
-    pi.sent.some((s) => s.kind === "user" && s.text.includes("verify against your success criteria")),
+    "verification is not queued into the ending execution run",
+    !pi.sent.some((s) => s.kind === "user" && s.text.includes("verify against your success criteria")),
   );
+  await pi.emit("agent_settled", {}, ctx);
+  const verificationMessages = pi.sent.filter(
+    (s) => s.kind === "user" && s.text.includes("verify against your success criteria"),
+  );
+  check("agent_settled sends the verification prompt", verificationMessages.length === 1);
+  check("verification starts a fresh run without deliverAs", verificationMessages[0]?.options === undefined);
 
   // Verification answered -> plan closes out
   await pi.emit("agent_end", { messages: [] }, ctx);

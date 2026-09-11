@@ -57,6 +57,9 @@ A simple TODO execution tracker, much like Claude Code's
 pi install npm:@mattschoe/pi-plan
 ```
 
+Requires Pi `0.80.4` or newer for the `agent_settled` lifecycle event used to begin approved
+same-chat plans with a freshly rebuilt permission-mode prompt.
+
 ## Modes
 
 Since the upstream to `pi-pledit` is gone, here's some light documentation for how it works:

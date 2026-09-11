@@ -697,6 +697,10 @@ export default function planExtension(pi: ExtensionAPI): void {
 	let doneWhenText: string | undefined;
 	// Ephemeral: set when the verification prompt is in flight, never restored.
 	let verificationPending = false;
+	// User prompts created by agent_end must wait for agent_settled. Sending a
+	// follow-up from agent_end continues the same low-level run with its old
+	// system prompt, even if the permission mode changed in the meantime.
+	let postSettleUserMessage: string | undefined;
 
 	pi.registerFlag("plan", {
 		description: "Start in plan mode (read-only exploration)",
@@ -779,6 +783,7 @@ export default function planExtension(pi: ExtensionAPI): void {
 		todoItems = [];
 		doneWhenText = undefined;
 		verificationPending = false;
+		postSettleUserMessage = undefined;
 		updateStatus(ctx);
 		persistTracking();
 	}
@@ -961,14 +966,13 @@ export default function planExtension(pi: ExtensionAPI): void {
 			if (doneWhenText) {
 				verificationPending = true;
 				persistTracking();
-				pi.sendUserMessage(
+				postSettleUserMessage =
 					`All plan steps are complete. Before considering this task done, verify against your success criteria:\n\n${doneWhenText}\n\n` +
-						`For each criterion:\n` +
-						`- ✓ Met — confirm with evidence from the work done\n` +
-						`- ⚠ Partially met — explain what's missing\n` +
-						`- ✗ Not met — describe what still needs to be done\n\n` +
-						`If any criterion is not fully met, propose concrete next steps.`,
-				);
+					`For each criterion:\n` +
+					`- ✓ Met — confirm with evidence from the work done\n` +
+					`- ⚠ Partially met — explain what's missing\n` +
+					`- ✗ Not met — describe what still needs to be done\n\n` +
+					`If any criterion is not fully met, propose concrete next steps.`;
 			} else {
 				pi.sendMessage(
 					{
@@ -1028,16 +1032,14 @@ export default function planExtension(pi: ExtensionAPI): void {
 			const auto = choice.startsWith("1.");
 			setMode(auto ? "acceptEdits" : "default", ctx);
 			beginExecution(ctx);
-			pi.sendUserMessage(
+			postSettleUserMessage =
 				`Implement the approved plan from ${filepath}. ` +
-					(auto
-						? "Execute all steps without stopping for confirmation."
-						: "Ask for confirmation before each file edit or shell command.") +
-					(todoItems.length > 0
-						? ` Start with step 1: ${todoItems[0]!.text}. Tag each finished step with [DONE:n].`
-						: ""),
-				{ deliverAs: "followUp" },
-			);
+				(auto
+					? "Execute all steps without stopping for confirmation."
+					: "Ask for confirmation before each file edit or shell command.") +
+				(todoItems.length > 0
+					? ` Start with step 1: ${todoItems[0]!.text}. Tag each finished step with [DONE:n].`
+					: "");
 		} else if (choice === "4. Approve plan - open in new chat") {
 			// Hand off through the /plan-approve command rather than calling its
 			// body directly: the fresh chat is created with ctx.newSession, which
@@ -1049,6 +1051,17 @@ export default function planExtension(pi: ExtensionAPI): void {
 			ctx.ui.notify(`Plan saved. Press Enter to execute it in a new chat.`, "info");
 		}
 		// "3. Provide further feedback" or dismissed — stay in plan mode.
+	});
+
+	pi.on("agent_settled", () => {
+		if (!postSettleUserMessage) return;
+
+		// Clear first: the new run eventually emits agent_settled recursively.
+		// With no delivery mode, Pi starts a fresh run and before_agent_start
+		// rebuilds the system prompt using the newly selected permission mode.
+		const message = postSettleUserMessage;
+		postSettleUserMessage = undefined;
+		pi.sendUserMessage(message);
 	});
 
 	// ── Commands ───────────────────────────────────────────────
