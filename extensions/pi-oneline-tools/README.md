@@ -36,11 +36,16 @@ npm test -- --watch=false... (140 lines)
 
 Press `ctrl+o` to expand the rows and see the original, uncollapsed, UI.
 
+The compact bash override also exposes an optional `reason` argument for compatibility with
+`@mattschoe/pi-plan` 1.1.0 and newer. Pi Plan uses it only when a command needs user approval, so
+ordinary auto-approved commands remain unchanged.
+
 ## Conflicts
 
 This extension works by **re-registering the built-in tool definitions** with `renderShell: "self"`
 and its own `renderCall` / `renderResult`. Any other extension that overrides those same five tools
-(`pi-tool-display` for example) will conflict, and whichever loads last wins.
+(`pi-tool-display` for example) will conflict, and whichever loads last wins. Pi Plan is explicitly
+compatible because it preserves bash overrides that already expose the optional `reason` field.
 
 ## Examples
 <img width="709" height="525" alt="image" src="https://github.com/user-attachments/assets/fb902fec-e734-4001-9690-5053521add4a" />

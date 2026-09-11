@@ -40,6 +40,7 @@ const jiti = createJiti(import.meta.url, {
   alias: {
     "@earendil-works/pi-coding-agent": join(PI_DIR, "dist", "index.js"),
     "@earendil-works/pi-tui": piRequire.resolve("@earendil-works/pi-tui"),
+    typebox: piRequire.resolve("typebox"),
   },
 });
 
@@ -47,19 +48,37 @@ const jiti = createJiti(import.meta.url, {
 // Fake pi + ctx
 // ---------------------------------------------------------------------------
 
-function makeFakePi() {
+function makeFakePi({ bashHasReason = false } = {}) {
   const handlers = new Map();
   const commands = new Map();
   const shortcuts = new Map();
   const flags = new Map();
   const entries = [];
   const sent = [];
+  const registeredTools = [];
+  const tools = new Map([
+    [
+      "bash",
+      {
+        name: "bash",
+        parameters: {
+          type: "object",
+          properties: {
+            command: { type: "string" },
+            ...(bashHasReason ? { reason: { type: "string" } } : {}),
+          },
+          required: ["command"],
+        },
+      },
+    ],
+  ]);
 
   const api = {
     entries,
     sent,
     commands,
     shortcuts,
+    registeredTools,
     on(type, handler) {
       const list = handlers.get(type) ?? [];
       list.push(handler);
@@ -78,6 +97,11 @@ function makeFakePi() {
     registerShortcut(key, def) {
       shortcuts.set(key, def);
     },
+    registerTool(def) {
+      registeredTools.push(def);
+      tools.set(def.name, def);
+    },
+    getAllTools: () => [...tools.values()],
     registerFlag(name, def) {
       flags.set(name, def.default);
     },
@@ -105,6 +129,7 @@ function makeCtx(pi, { cwd = WORK_DIR, selectAnswer, confirmAnswer = true } = {}
     widgets: [],
     editorText: undefined,
     selectPrompts: [],
+    confirmPrompts: [],
     theme: { fg: identity, bold: (t) => t, strikethrough: (t) => t },
     notify: (text, level) => ui.notifications.push({ text, level }),
     setStatus: (key, value) => ui.statuses.push({ key, value }),
@@ -116,7 +141,10 @@ function makeCtx(pi, { cwd = WORK_DIR, selectAnswer, confirmAnswer = true } = {}
       ui.selectPrompts.push({ prompt, options });
       return typeof selectAnswer === "function" ? selectAnswer(options) : selectAnswer;
     },
-    confirm: async () => confirmAnswer,
+    confirm: async (title, message) => {
+      ui.confirmPrompts.push({ title, message });
+      return typeof confirmAnswer === "function" ? confirmAnswer(title, message) : confirmAnswer;
+    },
     custom: async () => ({ action: "cancel" }),
   };
 
@@ -194,6 +222,24 @@ section("Registration");
   check("registers the mode-cycle shortcut on the default key", pi.shortcuts.has("f6"));
 }
 
+section("Bash explanation schema");
+{
+  const pi = makeFakePi();
+  extension(pi);
+  await pi.emit("session_start", {}, makeCtx(pi));
+  const bash = pi.getAllTools().find((tool) => tool.name === "bash");
+  check("upgrades bash with a reason parameter by default", Boolean(bash?.parameters?.properties?.reason));
+  check("keeps reason optional in the static schema", !bash?.parameters?.required?.includes("reason"));
+  check("registers one fallback override when reason is missing", pi.registeredTools.length === 1);
+  check("fallback keeps builtin bash execution", typeof bash?.execute === "function");
+  check("fallback keeps builtin bash rendering", typeof bash?.renderCall === "function" && typeof bash?.renderResult === "function");
+
+  const compatiblePi = makeFakePi({ bashHasReason: true });
+  extension(compatiblePi);
+  await compatiblePi.emit("session_start", {}, makeCtx(compatiblePi));
+  check("preserves a reason-aware bash override", compatiblePi.registeredTools.length === 0);
+}
+
 section("Mode cycling and prompt injection");
 {
   const pi = makeFakePi();
@@ -207,6 +253,7 @@ section("Mode cycling and prompt injection");
   await cycle(ctx);
   let [result] = await pi.emit("before_agent_start", { systemPrompt: "BASE" }, ctx);
   check("accept-edits injects its system prompt", result.systemPrompt?.includes("[ACCEPT EDITS MODE]"));
+  check("accept-edits injects unsafe-command reason guidance", result.systemPrompt?.includes("[BASH APPROVAL EXPLANATIONS]"));
 
   // acceptEdits -> plan
   await cycle(ctx);
@@ -214,11 +261,13 @@ section("Mode cycling and prompt injection");
   check("plan mode injects its system prompt", result.systemPrompt?.includes("[PLAN MODE ACTIVE]"));
   check("plan prompt keeps the base prompt", result.systemPrompt?.startsWith("BASE"));
   check("plan prompt asks for a Done When section", result.systemPrompt?.includes("## Done When"));
+  check("plan mode does not request approval reasons", !result.systemPrompt?.includes("[BASH APPROVAL EXPLANATIONS]"));
 
   // plan -> default
   await cycle(ctx);
   [result] = await pi.emit("before_agent_start", { systemPrompt: "BASE" }, ctx);
-  check("default mode injects nothing", result.systemPrompt === undefined);
+  check("default mode injects bash approval guidance", result.systemPrompt?.includes("[BASH APPROVAL EXPLANATIONS]"));
+  check("default guidance keeps the base prompt", result.systemPrompt?.startsWith("BASE"));
 
   check("mode is persisted to the session", pi.entries.some((e) => e.customType === "pledit-mode"));
 
@@ -238,7 +287,7 @@ section("Mode cycling and prompt injection");
   check("real messages survive the filter", filtered.messages[0].content === "real message");
 }
 
-section("Tool gating");
+section("Tool gating and approval explanations");
 {
   const pi = makeFakePi();
   extension(pi);
@@ -250,28 +299,85 @@ section("Tool gating");
 
   // default mode
   check("default mode allows read-only bash silently", !(await call("bash", { command: "git status" })).block);
-  check("default mode prompts on other bash", (await call("bash", { command: "npm publish" })).block);
+  check("read-only bash does not open a confirmation", ctx.ui.confirmPrompts.length === 0);
+
+  const missingDefaultReason = await call("bash", { command: "npm publish" });
+  check("approval-bound default bash requires a reason", missingDefaultReason.block);
+  check("missing reason returns retry guidance", missingDefaultReason.reason?.includes("Retry the bash call"));
+  check("missing reason blocks before confirmation", ctx.ui.confirmPrompts.length === 0);
+
+  const deniedDefault = await call("bash", {
+    command: "npm publish\necho finished",
+    reason: "Publish the tested package so users can install the new release.",
+  });
+  check("default bash still respects user rejection", deniedDefault.reason === "Denied by user");
+  check(
+    "default approval shows why and the complete command",
+    ctx.ui.confirmPrompts.at(-1)?.message ===
+      "Why: Publish the tested package so users can install the new release.\n\nCommand:\nnpm publish\necho finished",
+    ctx.ui.confirmPrompts.at(-1)?.message,
+  );
   check("default mode prompts on write", (await call("write", { file_path: "a.ts" })).block);
 
   await cycle(ctx); // acceptEdits
-  check("accept-edits allows ordinary bash", !(await call("bash", { command: "npm test" })).block);
+  const confirmationsBeforeAutomaticCalls = ctx.ui.confirmPrompts.length;
+  check("accept-edits allows ordinary bash without a reason", !(await call("bash", { command: "npm test" })).block);
+  check("ordinary accept-edits bash does not prompt", ctx.ui.confirmPrompts.length === confirmationsBeforeAutomaticCalls);
   check("accept-edits allows write", !(await call("write", { file_path: "a.ts" })).block);
-  check("accept-edits prompts on sudo (restored default)", (await call("bash", { command: "sudo apt install x" })).block);
+
+  const missingUnsafeReason = await call("bash", { command: "sudo apt install x" });
+  check("unsafe accept-edits bash requires a reason", missingUnsafeReason.reason?.includes("Retry the bash call"));
+  const deniedUnsafe = await call("bash", {
+    command: "docker system prune",
+    reason: "Remove unused Docker data to recover disk space.",
+  });
+  check("unsafe accept-edits bash prompts after receiving a reason", deniedUnsafe.reason === "Denied by user");
   check(
-    "accept-edits prompts on docker system prune (restored default)",
-    (await call("bash", { command: "docker system prune" })).block,
+    "unsafe approval includes its reason",
+    ctx.ui.confirmPrompts.at(-1)?.message.startsWith("Why: Remove unused Docker data"),
+    ctx.ui.confirmPrompts.at(-1)?.message,
   );
   check(
     "unsafe match survives env/wrapper prefixes",
-    (await call("bash", { command: "FOO=1 timeout 5 sudo rm -rf /" })).block,
+    (
+      await call("bash", {
+        command: "FOO=1 timeout 5 sudo rm -rf /",
+        reason: "Remove the explicitly targeted files with elevated permissions.",
+      })
+    ).block,
   );
 
   await cycle(ctx); // plan
   check("plan mode blocks write", (await call("write", { file_path: "a.ts" })).block);
   check("plan mode blocks edit", (await call("edit", { file_path: "a.ts" })).block);
-  check("plan mode blocks non-read-only bash", (await call("bash", { command: "rm file" })).block);
+  check("plan mode blocks non-read-only bash without asking for a reason", (await call("bash", { command: "rm file" })).reason?.includes("PLAN MODE"));
   check("plan mode allows read-only bash", !(await call("bash", { command: "git log" })).block);
   check("plan mode allows read", !(await call("read", { file_path: "a.ts" })).block);
+}
+
+section("Disabled bash explanations");
+{
+  const configPath = join(AGENT_DIR, "pledit.json");
+  await writeFile(configPath, JSON.stringify({ explainBash: false }));
+
+  const pi = makeFakePi();
+  extension(pi);
+  const ctx = makeCtx(pi, { confirmAnswer: false });
+  await pi.emit("session_start", {}, ctx);
+
+  check("disabled explanations do not override bash", pi.registeredTools.length === 0);
+  const [promptResult] = await pi.emit("before_agent_start", { systemPrompt: "BASE" }, ctx);
+  check("disabled explanations add no default-mode prompt guidance", promptResult.systemPrompt === undefined);
+
+  const [callResult] = await pi.emit(
+    "tool_call",
+    { toolName: "bash", input: { command: "npm publish" } },
+    ctx,
+  );
+  check("disabled explanations keep normal user rejection", callResult.reason === "Denied by user");
+  check("disabled explanations restore the legacy approval text", ctx.ui.confirmPrompts[0]?.message === "Allow: npm publish?");
+
+  await rm(configPath, { force: true });
 }
 
 section("Plan capture — option 4 (new chat)");
@@ -367,6 +473,46 @@ section("Plan capture — option 1 (execute here) and tracking");
   await pi.emit("agent_end", { messages: [] }, ctx);
   check("plan closes out after verification", pi.sent.some((s) => s.message?.customType === "plan-complete"));
   check("widget is cleared", ctx.ui.widgets.at(-1)?.value === undefined);
+}
+
+section("Todo widget rendering");
+{
+  const pi = makeFakePi();
+  extension(pi);
+  const ctx = makeCtx(pi);
+  const todos = Array.from({ length: 7 }, (_, index) => ({
+    step: index + 1,
+    text: `Step ${index + 1}`,
+    completed: false,
+  }));
+  pi.entries.push({
+    type: "custom",
+    customType: "plan-mode",
+    data: { enabled: false, todos, executing: true },
+  });
+
+  await pi.emit("session_start", {}, ctx);
+
+  const widgetFactory = ctx.ui.widgets.at(-1)?.value;
+  check("todo widget uses a custom component", typeof widgetFactory === "function");
+
+  const backgroundStyles = [];
+  const component = widgetFactory?.({}, {
+    ...ctx.ui.theme,
+    bg: (style, text) => {
+      backgroundStyles.push(style);
+      return text;
+    },
+  });
+  const rendered = component?.render(80) ?? [];
+  check("todo widget shows at most five items plus overflow", rendered.length === 6, `${rendered.length} lines`);
+  check("todo widget hides items after the fifth", !rendered.join("\n").includes("Step 6"));
+  check("todo widget reports hidden items", rendered.join("\n").includes("2 more (7 total)"));
+  check(
+    "todo widget uses the gray selected background",
+    backgroundStyles.length > 0 && backgroundStyles.every((style) => style === "selectedBg"),
+    JSON.stringify(backgroundStyles),
+  );
 }
 
 section("Resume");

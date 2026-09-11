@@ -9,6 +9,15 @@ This extension extends jaroslawjanas' work with the following new features.
 
 ## New features
 
+### Readable bash approval explanations
+When a bash command needs confirmation, the approval dialog starts with a short plain-language reason
+before showing the complete command. Auto-approved commands stay quiet: read-only commands in Default
+mode and ordinary commands in Accept Edits mode do not need a reason.
+
+The model-facing `reason` argument is optional because whether approval is needed depends on the current
+mode and command. Pi Plan enforces it at runtime only for commands that actually open an approval dialog.
+Set `"explainBash": false` in the config to restore the original `Allow: <command>?` prompt.
+
 ### Improved plan document structure
 When writing plans with agents like Claude Code or OpenAI you very often find yourself seeing that the
 plan is a "logbook" of the conversation and disagreements you had with the LLM before the plan is written.
@@ -85,7 +94,8 @@ The default looks like so:
 {
   "shortcut": "f6",                // key that cycles modes; e.g. "shift+tab"
   "readonlyBash": ["ls ", "git status", "..."],
-  "unsafePatterns": ["rm -rf", "sudo", "chmod 777", "docker system prune"]
+  "unsafePatterns": ["rm -rf", "sudo", "chmod 777", "docker system prune"],
+  "explainBash": true               // include a reason in bash approval dialogs (default: true)
 }
 ```
 
@@ -97,6 +107,27 @@ Substrings that force a confirmation prompt even in accept-edits mode, and
 that disqualify a command from the read-only allowlist. Matching happens after wrappers and leading
 environment assignments are stripped, so `FOO=1 timeout 5 sudo rm -rf /` is matched on
 `sudo rm -rf /`.
+
+### `explainBash`
+Defaults to `true`. When enabled, bash calls that require confirmation must include a concise `reason`,
+and the dialog renders it as:
+
+```text
+Why: <reason>
+
+Command:
+<complete command>
+```
+
+Commands that are auto-approved do not require a reason. Set this to `false` to disable reason
+enforcement and use the legacy confirmation text.
+
+## Bash override compatibility
+Pi Plan checks the final registered bash schema at session start. If it already supports the optional
+`reason` field, Pi Plan leaves that tool and its renderer untouched. `pi-oneline-tools` 1.1.0 and newer
+include this field, so its compact bash row is preserved. If another bash override does not expose
+`reason`, Pi Plan replaces it with a reason-aware copy of Pi's built-in bash tool while explanations are
+enabled.
 
 ## Examples
 ### `/plans`

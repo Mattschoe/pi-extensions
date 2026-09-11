@@ -1,7 +1,7 @@
 {
   "name": "@mattschoe/pi-plan",
-  "version": "1.0.0",
-  "description": "Plan mode, accept-edits mode and plan execution tracking for Pi: cycle permission modes, capture the plan to .pi/plans, hand it to a fresh chat, and tick off steps against Done-When criteria.",
+  "version": "1.1.0",
+  "description": "Plan mode, accept-edits mode, readable bash approval reasons, and plan execution tracking for Pi.",
   "type": "module",
   "license": "MIT",
   "author": "Matthias Schoenning Nielsen",
@@ -26,7 +26,9 @@
     "plan-mode",
     "accept-edits",
     "planning",
-    "todos"
+    "todos",
+    "permissions",
+    "approval"
   ],
   "files": [
     "extensions",
@@ -40,7 +42,8 @@
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",
-    "@earendil-works/pi-tui": "*"
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
   },
   "engines": {
     "node": ">=20"

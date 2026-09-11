@@ -1,6 +1,6 @@
 {
   "name": "pi-oneline-tools",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Renders Pi's read/grep/find/ls/bash tool calls as a single dim line each instead of a bordered box, with the full output one keypress away.",
   "type": "module",
   "license": "BSD-3-Clause",
@@ -37,7 +37,8 @@
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",
-    "@earendil-works/pi-tui": "*"
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
   },
   "engines": {
     "node": ">=20"

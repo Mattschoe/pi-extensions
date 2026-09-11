@@ -21,20 +21,28 @@
 // Config (project `<cwd>/.pi/pledit.json`, then global
 // `<agent-dir>/pledit.json` which overrides it — the filename is kept from
 // upstream so existing configs keep working):
-//   { "shortcut": "shift+tab", "readonlyBash": [...], "unsafePatterns": [...] }
+//   { "shortcut": "shift+tab", "readonlyBash": [...], "unsafePatterns": [...],
+//     "explainBash": true }
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { CONFIG_DIR_NAME, getAgentDir } from "@earendil-works/pi-coding-agent";
 import {
+	CONFIG_DIR_NAME,
+	createBashToolDefinition,
+	getAgentDir,
+} from "@earendil-works/pi-coding-agent";
+import {
+	Box,
 	Container,
 	Key,
 	matchesKey,
 	SelectList,
 	type SelectItem,
+	Text,
 } from "@earendil-works/pi-tui";
 import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { Type, type TSchema } from "typebox";
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -48,10 +56,17 @@ const DEFAULT_SHORTCUT = "f6";
 
 const CONFIG_FILENAME = "pledit.json";
 
+const MAX_VISIBLE_TODOS = 5;
+
+const BASH_REASON_MAX_LENGTH = 160;
+const BASH_REASON_DESCRIPTION =
+	"One concise plain-language sentence explaining why this command needs approval and what it is expected to accomplish. Omit this for auto-approved commands.";
+
 interface PlanConfig {
 	shortcut?: string;
 	readonlyBash?: string[];
 	unsafePatterns?: string[];
+	explainBash?: boolean;
 }
 
 const DEFAULT_READONLY_BASH = [
@@ -82,6 +97,7 @@ function applyConfig(target: Required<PlanConfig>, source: PlanConfig | undefine
 	if (source.shortcut) target.shortcut = source.shortcut;
 	if (source.readonlyBash) target.readonlyBash = source.readonlyBash;
 	if (source.unsafePatterns) target.unsafePatterns = source.unsafePatterns;
+	if (source.explainBash !== undefined) target.explainBash = source.explainBash;
 }
 
 function resolveConfig(cwd: string): Required<PlanConfig> {
@@ -89,6 +105,7 @@ function resolveConfig(cwd: string): Required<PlanConfig> {
 		shortcut: DEFAULT_SHORTCUT,
 		readonlyBash: DEFAULT_READONLY_BASH,
 		unsafePatterns: DEFAULT_UNSAFE_PATTERNS,
+		explainBash: true,
 	};
 	// Project config first, then global — global wins, matching upstream.
 	applyConfig(config, readJson<PlanConfig>(path.join(cwd, CONFIG_DIR_NAME, CONFIG_FILENAME)));
@@ -131,6 +148,59 @@ function isReadonlyBash(command: string, config: Required<PlanConfig>): boolean 
 	if (isUnsafe(command, config.unsafePatterns)) return false;
 	const trimmed = stripBashWrappers(command);
 	return config.readonlyBash.some((p) => trimmed.startsWith(p));
+}
+
+interface BashInput {
+	command: string;
+	timeout?: number;
+	reason?: string;
+}
+
+function hasBashReasonParameter(tool: { parameters?: unknown } | undefined): boolean {
+	if (!tool || typeof tool.parameters !== "object" || tool.parameters === null) return false;
+	const properties = (tool.parameters as { properties?: unknown }).properties;
+	return typeof properties === "object" && properties !== null && "reason" in properties;
+}
+
+function createReasonAwareBashTool(cwd: string) {
+	const bash = createBashToolDefinition(cwd);
+	const properties = (bash.parameters as { properties: Record<string, TSchema> }).properties;
+	return {
+		...bash,
+		description: `${bash.description} For commands requiring user approval, include a concise reason.`,
+		parameters: Type.Object({
+			...properties,
+			reason: Type.Optional(
+				Type.String({
+					description: BASH_REASON_DESCRIPTION,
+					minLength: 1,
+					maxLength: BASH_REASON_MAX_LENGTH,
+				}),
+			),
+		}),
+	};
+}
+
+function bashExplanationPrompt(mode: Mode, config: Required<PlanConfig>): string {
+	if (!config.explainBash || mode === "plan") return "";
+	const approvalRule =
+		mode === "default"
+			? `A bash command requires approval unless it starts with one of these read-only prefixes: ${config.readonlyBash.join(", ")}.`
+			: `A bash command requires approval only when it contains one of these unsafe patterns: ${config.unsafePatterns.join(", ")}.`;
+	return (
+		`\n\n[BASH APPROVAL EXPLANATIONS] ${approvalRule}` +
+		`\n- For a bash command that requires approval, set its \`reason\` argument to one concise plain-language sentence explaining why the command is needed and what it will accomplish.` +
+		`\n- Omit \`reason\` for commands that are auto-approved.`
+	);
+}
+
+function normalizedBashReason(input: BashInput): string {
+	return typeof input.reason === "string" ? input.reason.trim().replace(/\s+/g, " ") : "";
+}
+
+function bashApprovalMessage(input: BashInput, explainBash: boolean): string {
+	if (!explainBash) return `Allow: ${input.command}?`;
+	return `Why: ${normalizedBashReason(input)}\n\nCommand:\n${input.command}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -676,13 +746,23 @@ export default function planExtension(pi: ExtensionAPI): void {
 		ctx.ui.setStatus("pi-plan", parts.length > 0 ? parts.join(" ") : undefined);
 
 		if (executionMode && todoItems.length > 0) {
-			const lines = todoItems.map((item) =>
-				item.completed
-					? ctx.ui.theme.fg("success", "☑ ") +
-						ctx.ui.theme.fg("muted", ctx.ui.theme.strikethrough(item.text))
-					: `${ctx.ui.theme.fg("muted", "☐ ")}${item.text}`,
-			);
-			ctx.ui.setWidget("plan-todos", lines);
+			ctx.ui.setWidget("plan-todos", (_tui, theme) => {
+				const visibleItems = todoItems.slice(0, MAX_VISIBLE_TODOS);
+				const lines = visibleItems.map((item) =>
+					item.completed
+						? theme.fg("success", "☑ ") +
+							theme.fg("muted", theme.strikethrough(item.text))
+						: `${theme.fg("muted", "☐ ")}${item.text}`,
+				);
+				const hiddenCount = todoItems.length - visibleItems.length;
+				if (hiddenCount > 0) {
+					lines.push(theme.fg("dim", `… ${hiddenCount} more (${todoItems.length} total)`));
+				}
+
+				const box = new Box(1, 0, (text) => theme.bg("selectedBg", text));
+				box.addChild(new Text(lines.join("\n"), 0, 0));
+				return box;
+			});
 		} else {
 			ctx.ui.setWidget("plan-todos", undefined);
 		}
@@ -736,6 +816,11 @@ export default function planExtension(pi: ExtensionAPI): void {
 			result.systemPrompt = event.systemPrompt + ACCEPT_EDITS_PROMPT;
 		}
 
+		const explanationPrompt = bashExplanationPrompt(currentMode, config);
+		if (explanationPrompt) {
+			result.systemPrompt = (result.systemPrompt ?? event.systemPrompt) + explanationPrompt;
+		}
+
 		if (executionMode && todoItems.length > 0) {
 			const remaining = todoItems.filter((t) => !t.completed);
 			let content =
@@ -767,6 +852,35 @@ export default function planExtension(pi: ExtensionAPI): void {
 
 	// ── Tool permission gating ─────────────────────────────────
 
+	async function approveBash(input: BashInput, ctx: ExtensionContext) {
+		// Preserve pi-plan's existing non-interactive behavior: without an approval
+		// UI the call is allowed, so there is no approval explanation to require.
+		if (!ctx.hasUI) return {};
+
+		if (config.explainBash) {
+			const reason = normalizedBashReason(input);
+			if (!reason) {
+				return {
+					block: true,
+					reason:
+						"This bash command requires user approval. Retry the bash call with a concise `reason` explaining why it is needed and what it will accomplish.",
+				};
+			}
+			if (reason.length > BASH_REASON_MAX_LENGTH) {
+				return {
+					block: true,
+					reason: `The bash approval reason must be ${BASH_REASON_MAX_LENGTH} characters or fewer. Retry with a shorter \`reason\`.`,
+				};
+			}
+		}
+
+		const ok = await ctx.ui.confirm(
+			"Confirm command",
+			bashApprovalMessage(input, config.explainBash),
+		);
+		return ok ? {} : { block: true, reason: "Denied by user" };
+	}
+
 	pi.on("tool_call", async (event, ctx) => {
 		// PLAN MODE — block writes/edits; gate bash to read-only
 		if (currentMode === "plan") {
@@ -777,7 +891,7 @@ export default function planExtension(pi: ExtensionAPI): void {
 				};
 			}
 			if (event.toolName === "bash") {
-				const cmd = (event.input as { command: string }).command;
+				const cmd = (event.input as BashInput).command;
 				if (!isReadonlyBash(cmd, config)) {
 					return { block: true, reason: `[PLAN MODE] Only read-only bash commands are allowed.` };
 				}
@@ -795,23 +909,17 @@ export default function planExtension(pi: ExtensionAPI): void {
 				if (!ok) return { block: true, reason: "Denied by user" };
 			}
 			if (event.toolName === "bash") {
-				const cmd = (event.input as { command: string }).command;
-				if (isReadonlyBash(cmd, config)) return {}; // allow silently
-				if (!ctx.hasUI) return {};
-				const ok = await ctx.ui.confirm("Confirm command", `Allow: ${cmd}?`);
-				if (!ok) return { block: true, reason: "Denied by user" };
+				const input = event.input as BashInput;
+				if (isReadonlyBash(input.command, config)) return {}; // allow silently
+				return approveBash(input, ctx);
 			}
 			return {};
 		}
 
 		// ACCEPT EDITS MODE — auto-approve everything except unsafe patterns
 		if (currentMode === "acceptEdits" && event.toolName === "bash") {
-			const cmd = (event.input as { command: string }).command;
-			if (isUnsafe(cmd, config.unsafePatterns)) {
-				if (!ctx.hasUI) return {};
-				const ok = await ctx.ui.confirm("Confirm command", `Allow: ${cmd}?`);
-				if (!ok) return { block: true, reason: "Denied by user" };
-			}
+			const input = event.input as BashInput;
+			if (isUnsafe(input.command, config.unsafePatterns)) return approveBash(input, ctx);
 		}
 
 		return {};
@@ -1092,6 +1200,13 @@ export default function planExtension(pi: ExtensionAPI): void {
 	// ── Session start / resume ─────────────────────────────────
 
 	pi.on("session_start", async (_event, ctx) => {
+		if (config.explainBash) {
+			const currentBash = pi.getAllTools().find((tool) => tool.name === "bash");
+			if (!hasBashReasonParameter(currentBash)) {
+				pi.registerTool(createReasonAwareBashTool(ctx.cwd));
+			}
+		}
+
 		currentMode = readSavedMode(ctx);
 		if (pi.getFlag("plan") === true) currentMode = "plan";
 

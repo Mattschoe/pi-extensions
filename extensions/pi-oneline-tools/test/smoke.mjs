@@ -31,6 +31,7 @@ const jiti = createJiti(import.meta.url, {
   alias: {
     "@earendil-works/pi-coding-agent": join(PI_DIR, "dist", "index.js"),
     "@earendil-works/pi-tui": piRequire.resolve("@earendil-works/pi-tui"),
+    typebox: piRequire.resolve("typebox"),
   },
 });
 
@@ -80,6 +81,15 @@ check(
 check(
   "every tool keeps the builtin execute",
   [...tools.values()].every((t) => typeof t.execute === "function"),
+);
+const bashDefinition = tools.get("bash");
+check(
+  "bash advertises the optional approval reason",
+  Boolean(bashDefinition?.parameters?.properties?.reason),
+);
+check(
+  "bash does not require a reason for auto-approved commands",
+  !bashDefinition?.parameters?.required?.includes("reason"),
 );
 
 // ---------------------------------------------------------------------------

@@ -19,6 +19,7 @@ import {
 import { Text } from "@earendil-works/pi-tui";
 import { homedir } from "os";
 import path from "path";
+import { Type, type TSchema } from "typebox";
 
 // ── helpers ─────────────────────────────────────────────────────────────────
 
@@ -33,6 +34,25 @@ const cwd = process.cwd();
 type RenderOptions = { expanded?: boolean; isPartial?: boolean };
 type ThemeLike = { fg(style: string, text: string): string };
 type ToolResultLike = { content?: unknown; isError?: boolean };
+
+type ToolWithParameters = { parameters: { properties?: Record<string, TSchema> } };
+
+function withOptionalBashReason<T extends ToolWithParameters>(tool: T) {
+  return {
+    ...tool,
+    parameters: Type.Object({
+      ...(tool.parameters.properties ?? {}),
+      reason: Type.Optional(
+        Type.String({
+          description:
+            "One concise plain-language sentence explaining why this command needs approval and what it is expected to accomplish. Omit this for auto-approved commands.",
+          minLength: 1,
+          maxLength: 160,
+        }),
+      ),
+    }),
+  };
+}
 
 function compactPath(p: string): string {
   const resolved = p.startsWith("/") ? p : path.resolve(cwd, p);
@@ -171,9 +191,13 @@ export default function (pi: ExtensionAPI) {
 
   // ═══════════════════════════════════════════════════════════════════════════
   //  bash — compact, no box
+  //
+  // Keep pi-plan's optional approval reason in this override. Pi-plan checks
+  // the final bash schema at session start and leaves this renderer intact when
+  // that field is present.
   // ═══════════════════════════════════════════════════════════════════════════
   pi.registerTool({
-    ...createBashTool(cwd),
+    ...withOptionalBashReason(createBashTool(cwd)),
     renderShell: "self",
     renderCall(args, theme, _context) {
       const cmd = String((args as Record<string, unknown>).command ?? "bash");
