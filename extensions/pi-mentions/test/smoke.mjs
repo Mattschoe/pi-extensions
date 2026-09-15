@@ -228,6 +228,8 @@ const baseProvider = {
 const suggest = (provider, text) =>
   provider.getSuggestions([text], 0, text.length, { signal: new AbortController().signal });
 
+const flushAsync = () => new Promise((resolve) => setTimeout(resolve, 0));
+
 // ---------------------------------------------------------------------------
 // Assertions
 // ---------------------------------------------------------------------------
@@ -465,6 +467,130 @@ await piUnauth.shortcuts.get("alt+g").handler(makeCtx(REPO, { editorText: "[#412
 check(
   "alt+g is silent without gh",
   !piUnauth.execCalls.some((c) => c.cmd === "gh" && c.args.includes("--web")),
+);
+
+const ghKilledAuth = (args) =>
+  args[0] === "auth"
+    ? { stdout: "Logged in", stderr: "", code: 0, killed: true }
+    : ghWorking()(args);
+const piKilledAuth = makeFakePi(ghKilledAuth);
+factory(piKilledAuth);
+const killedAuthCtx = makeCtx(REPO);
+await piKilledAuth.handler("session_start")({ type: "session_start" }, killedAuthCtx);
+check("a killed code-zero auth check does not arm #", killedAuthCtx.ui.providerFactories.length === 1);
+
+// ---------------------------------------------------------------------------
+// GitHub issue-list recovery
+// ---------------------------------------------------------------------------
+
+section("# load recovery");
+const workingGh = ghWorking();
+const killedListResult = { stdout: "[", stderr: "", code: 0, killed: true };
+
+let transientListAttempts = 0;
+const ghTransientList = (args) => {
+  if (args[0] === "issue" && args[1] === "list") {
+    transientListAttempts++;
+    if (transientListAttempts === 1) return killedListResult;
+  }
+  return workingGh(args);
+};
+const piTransient = makeFakePi(ghTransientList);
+factory(piTransient);
+const transientCtx = makeCtx(REPO);
+await piTransient.handler("session_start")({ type: "session_start" }, transientCtx);
+await flushAsync();
+const transientProvider = transientCtx.ui.providerFactories[1](baseProvider);
+const transientIssues = await suggest(transientProvider, "fix #");
+check("a killed first load is retried once", transientListAttempts === 2, `${transientListAttempts}`);
+check("the successful retry supplies issue suggestions", values(transientIssues).length === ISSUES.length);
+check(
+  "a successful retry does not show a load error",
+  !transientCtx.ui.notifications.some((n) => n.level === "error"),
+);
+const transientListCalls = piTransient.execCalls.filter(
+  (c) => c.cmd === "gh" && c.args[0] === "issue" && c.args[1] === "list",
+);
+check(
+  "issue-list attempts use the 10 second timeout",
+  transientListCalls.every((c) => c.opts.timeout === 10_000),
+);
+
+let exhaustedListAttempts = 0;
+const ghExhaustedThenWorking = (args) => {
+  if (args[0] === "issue" && args[1] === "list") {
+    exhaustedListAttempts++;
+    if (exhaustedListAttempts <= 2) return killedListResult;
+  }
+  return workingGh(args);
+};
+const piExhausted = makeFakePi(ghExhaustedThenWorking);
+factory(piExhausted);
+const exhaustedCtx = makeCtx(REPO);
+await piExhausted.handler("session_start")({ type: "session_start" }, exhaustedCtx);
+await flushAsync();
+check("an exhausted load makes exactly two attempts", exhaustedListAttempts === 2, `${exhaustedListAttempts}`);
+check(
+  "killed attempts are reported as a 10 second timeout",
+  exhaustedCtx.ui.notifications.some(
+    (n) => n.text === "mentions: failed to load issues: timed out after 10 seconds",
+  ),
+  JSON.stringify(exhaustedCtx.ui.notifications),
+);
+check(
+  "killed output is never reported as malformed JSON",
+  !exhaustedCtx.ui.notifications.some((n) => has(n.text, "failed to parse")),
+);
+const exhaustedProvider = exhaustedCtx.ui.providerFactories[1](baseProvider);
+const recoveredIssues = await suggest(exhaustedProvider, "fix #");
+check("a later # request retries after exhaustion", exhaustedListAttempts === 3, `${exhaustedListAttempts}`);
+check("the later retry can recover", values(recoveredIssues).length === ISSUES.length);
+
+let malformedListAttempts = 0;
+const ghMalformedList = (args) => {
+  if (args[0] === "issue" && args[1] === "list") {
+    malformedListAttempts++;
+    return { stdout: "not-json", stderr: "", code: 0, killed: false };
+  }
+  return workingGh(args);
+};
+const piMalformed = makeFakePi(ghMalformedList);
+factory(piMalformed);
+const malformedCtx = makeCtx(REPO);
+await piMalformed.handler("session_start")({ type: "session_start" }, malformedCtx);
+await flushAsync();
+check("genuinely malformed output is retried once", malformedListAttempts === 2);
+check(
+  "genuinely malformed output keeps the parse diagnostic",
+  malformedCtx.ui.notifications.some(
+    (n) => n.text === "mentions: failed to parse gh issue list output",
+  ),
+);
+
+let releaseDedupedList;
+let dedupedListAttempts = 0;
+const ghDedupedList = (args) => {
+  if (args[0] === "issue" && args[1] === "list") {
+    dedupedListAttempts++;
+    return new Promise((resolve) => {
+      releaseDedupedList = () => resolve(workingGh(args));
+    });
+  }
+  return workingGh(args);
+};
+const piDeduped = makeFakePi(ghDedupedList);
+factory(piDeduped);
+const dedupedCtx = makeCtx(REPO);
+await piDeduped.handler("session_start")({ type: "session_start" }, dedupedCtx);
+const dedupedProvider = dedupedCtx.ui.providerFactories[1](baseProvider);
+const dedupedA = suggest(dedupedProvider, "fix #");
+const dedupedB = suggest(dedupedProvider, "check #");
+check("concurrent callers share one in-flight load", dedupedListAttempts === 1, `${dedupedListAttempts}`);
+releaseDedupedList();
+const [dedupedIssuesA, dedupedIssuesB] = await Promise.all([dedupedA, dedupedB]);
+check(
+  "all deduplicated callers receive the loaded issues",
+  values(dedupedIssuesA).length === ISSUES.length && values(dedupedIssuesB).length === ISSUES.length,
 );
 
 // ---------------------------------------------------------------------------
@@ -725,6 +851,27 @@ check(
   oneRef.ui.notifications.some((n) => has(n.text, "opened issue #412")),
 );
 
+const ghKilledWeb = (args) =>
+  args.includes("--web")
+    ? { stdout: "", stderr: "", code: 0, killed: true }
+    : workingGh(args);
+const piKilledWeb = makeFakePi(ghKilledWeb);
+factory(piKilledWeb);
+const killedWebStartupCtx = makeCtx(REPO);
+await piKilledWeb.handler("session_start")({ type: "session_start" }, killedWebStartupCtx);
+const killedWebCtx = makeCtx(REPO, { editorText: "fix [#412 - Login crashes]" });
+await piKilledWeb.shortcuts.get("alt+g").handler(killedWebCtx);
+check(
+  "a killed code-zero alt+g request reports a timeout",
+  killedWebCtx.ui.notifications.some(
+    (n) => has(n.text, "failed to open issue #412: timed out after 10 seconds"),
+  ),
+);
+check(
+  "a killed alt+g request does not claim success",
+  !killedWebCtx.ui.notifications.some((n) => has(n.text, "opened issue #412")),
+);
+
 const twoRefs = makeCtx(REPO, {
   editorText: "[#7 - Flaky retry] and [#415 - Dark mode contrast]",
   selectAnswer: (options) => options[1],
@@ -806,9 +953,11 @@ check("leaving pi's own widget cleanup alone", replacedUi.widgets.length === wid
 // The issue list warms in the background at session_start; landing after the
 // replacement must not notify through the dead ctx either.
 let releaseIssueList;
+let slowListAttempts = 0;
 const ghSlowList = (args) => {
   if (args[0] === "auth") return { stdout: "Logged in", stderr: "", code: 0, killed: false };
   if (args[0] === "issue" && args[1] === "list") {
+    slowListAttempts++;
     return new Promise((resolve) => {
       releaseIssueList = () => resolve({ stdout: "", stderr: "gh died", code: 1, killed: false });
     });
@@ -825,6 +974,7 @@ inflightCtx.invalidate();
 releaseIssueList();
 await tick();
 check("an issue load that lands after the replacement stays quiet", inflightCtx.staleAccesses === 0);
+check("an issue load does not retry after session replacement", slowListAttempts === 1);
 
 // ---------------------------------------------------------------------------
 // Summary

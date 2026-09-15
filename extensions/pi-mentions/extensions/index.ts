@@ -126,7 +126,8 @@ const GIT_TIMEOUT_MS = 15_000;
 const MAX_ISSUES = 100;
 const MAX_ISSUE_SUGGESTIONS = 20;
 const GH_AUTH_TIMEOUT_MS = 10_000;
-const GH_LIST_TIMEOUT_MS = 5_000;
+const GH_LIST_TIMEOUT_MS = 10_000;
+const GH_LIST_ATTEMPTS = 2;
 const GH_VIEW_TIMEOUT_MS = 10_000;
 
 const CONFIG_FILE_NAME = "mentions.json";
@@ -670,6 +671,21 @@ function createGitMentionSpec(pi: ExtensionAPI, cwd: string, gitAvailable: boole
 // `#` — GitHub issue mentions
 // ===========================================================================
 
+/**
+ * Pi exposes timeout/abort separately from the exit code. In pi 0.83 a process
+ * terminated by a signal can have its null exit code normalized to 0, so code
+ * alone is not a success check.
+ */
+const execSucceeded = (result: ExecResult): boolean => result.code === 0 && !result.killed;
+
+function execFailureDetails(result: ExecResult, timeoutMs: number): string {
+	if (result.killed) {
+		const seconds = timeoutMs / 1_000;
+		return `timed out after ${seconds} second${seconds === 1 ? "" : "s"}`;
+	}
+	return result.stderr.trim() || `exit code ${result.code}`;
+}
+
 function parseGitHubRepo(remoteUrl: string): string | undefined {
 	const sshMatch = remoteUrl.match(/^git@github\.com:([^/]+\/[^/]+?)(?:\.git)?$/);
 	if (sshMatch) return sshMatch[1];
@@ -682,7 +698,7 @@ function parseGitHubRepo(remoteUrl: string): string | undefined {
 
 async function resolveGitHubRepo(pi: ExtensionAPI, cwd: string): Promise<string | undefined> {
 	const result = await pi.exec("git", ["remote", "-v"], { cwd, timeout: 5_000 });
-	if (result.code !== 0) return undefined; // not a git repository
+	if (!execSucceeded(result)) return undefined; // not a git repository, or timed out
 
 	for (const line of result.stdout.split("\n")) {
 		const columns = line.trim().split(/\s+/);
@@ -704,7 +720,7 @@ async function isGhUsable(pi: ExtensionAPI, cwd: string): Promise<boolean> {
 		cwd,
 		timeout: GH_AUTH_TIMEOUT_MS,
 	});
-	return result.code === 0;
+	return execSucceeded(result);
 }
 
 async function fetchIssueBody(
@@ -722,7 +738,7 @@ async function fetchIssueBody(
 		["issue", "view", String(issueNumber), "--repo", repo, "--json", fields],
 		{ cwd, timeout: GH_VIEW_TIMEOUT_MS },
 	);
-	if (result.code !== 0) return null;
+	if (!execSucceeded(result)) return null;
 
 	try {
 		return JSON.parse(result.stdout) as IssueBody;
@@ -1093,8 +1109,19 @@ export default function (pi: ExtensionAPI): void {
 		issueCwd = cwd;
 
 		let issuesPromise: Promise<GitHubIssue[] | undefined> | undefined;
-		const getIssues = async (): Promise<GitHubIssue[] | undefined> => {
-			issuesPromise ||= (async () => {
+
+		type IssueListFailure =
+			| { kind: "exec"; result: ExecResult }
+			| { kind: "parse" };
+
+		const loadIssues = async (): Promise<GitHubIssue[] | undefined> => {
+			let lastFailure: IssueListFailure | undefined;
+
+			for (let attempt = 0; attempt < GH_LIST_ATTEMPTS; attempt += 1) {
+				// A prior attempt may finish after /new, /resume, fork, or reload.
+				// Do not call pi.exec again through the now-stale extension runtime.
+				if (!sessionActive) return undefined;
+
 				const result = await pi.exec(
 					"gh",
 					[
@@ -1111,14 +1138,15 @@ export default function (pi: ExtensionAPI): void {
 					],
 					{ cwd, timeout: GH_LIST_TIMEOUT_MS },
 				);
-				if (result.code !== 0) {
-					if (!loadErrorShown) {
-						loadErrorShown = true;
-						const details = result.stderr.trim() || `exit code ${result.code}`;
-						notify(`mentions: failed to load issues: ${details}`, "error");
-					}
-					return undefined;
+
+				// The session can be replaced while the subprocess is in flight.
+				if (!sessionActive) return undefined;
+
+				if (!execSucceeded(result)) {
+					lastFailure = { kind: "exec", result };
+					continue;
 				}
+
 				try {
 					const issues = JSON.parse(result.stdout) as GitHubIssue[];
 					loadedIssues = issues;
@@ -1128,14 +1156,39 @@ export default function (pi: ExtensionAPI): void {
 					}
 					return issues;
 				} catch {
-					if (!loadErrorShown) {
-						loadErrorShown = true;
-						notify("mentions: failed to parse gh issue list output", "error");
-					}
-					return undefined;
+					lastFailure = { kind: "parse" };
 				}
-			})();
-			return issuesPromise;
+			}
+
+			if (!loadErrorShown && lastFailure) {
+				loadErrorShown = true;
+				if (lastFailure.kind === "parse") {
+					notify("mentions: failed to parse gh issue list output", "error");
+				} else {
+					const details = execFailureDetails(lastFailure.result, GH_LIST_TIMEOUT_MS);
+					notify(`mentions: failed to load issues: ${details}`, "error");
+				}
+			}
+			return undefined;
+		};
+
+		const getIssues = (): Promise<GitHubIssue[] | undefined> => {
+			if (issuesPromise) return issuesPromise;
+
+			const attempt = loadIssues();
+			issuesPromise = attempt;
+			// A successful result remains cached. A failed load is evicted so a
+			// later `#` request can recover without requiring /reload. Identity
+			// protects a newer in-flight request from an older completion.
+			void attempt.then(
+				(issues) => {
+					if (issues === undefined && issuesPromise === attempt) issuesPromise = undefined;
+				},
+				() => {
+					if (issuesPromise === attempt) issuesPromise = undefined;
+				},
+			);
+			return attempt;
 		};
 
 		// Warm the list so the first `#` keystroke is instant.
@@ -1204,8 +1257,8 @@ export default function (pi: ExtensionAPI): void {
 			["issue", "view", String(issueNumber), "--repo", issueRepo!, "--web"],
 			{ cwd: issueCwd!, timeout: GH_VIEW_TIMEOUT_MS },
 		);
-		if (result.code !== 0) {
-			const details = result.stderr.trim() || `exit code ${result.code}`;
+		if (!execSucceeded(result)) {
+			const details = execFailureDetails(result, GH_VIEW_TIMEOUT_MS);
 			ctx.ui.notify(`mentions: failed to open issue #${issueNumber}: ${details}`, "error");
 			return;
 		}

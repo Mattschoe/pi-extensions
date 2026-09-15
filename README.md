@@ -12,6 +12,16 @@ A collection of the extensions i have made for the coding agent [Pi](https://pi.
 | [Auto Name Session](#auto-name-session) | Names an unnamed session from your first prompt |
 | [Skills Manager](#skills-manager) | Adds the `/skills` command to view and toggle skills |
 
+## Testing
+
+Test a local extension without loading installed extensions:
+
+```bash
+pi --no-extensions -e ./extensions/<name>
+```
+
+Run `/reload` after changes or switching branches.
+
 ## Packages
 
 ### [Branch Context](extensions/branch-context/)
