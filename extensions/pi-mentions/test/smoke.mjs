@@ -98,9 +98,17 @@ function makeFakePi(ghResponder) {
 const ghAbsent = () => ({ stdout: "", stderr: "gh: command not found", code: 127, killed: false });
 
 const ISSUES = [
-  { number: 7, title: "Flaky retry on config fetch", state: "OPEN" },
-  { number: 412, title: "Login crashes on empty password", state: "OPEN" },
-  { number: 415, title: "Dark mode contrast on badges", state: "OPEN" },
+  { number: 7, title: "Flaky retry on config fetch", assignees: [] },
+  {
+    number: 412,
+    title: "Login crashes on empty password",
+    assignees: [{ login: "alice" }, { login: "bob" }],
+  },
+  {
+    number: 415,
+    title: "Dark mode contrast on badges",
+    assignees: [{ login: "alexanderthegreat" }, { login: "bob" }],
+  },
 ];
 
 const comment = (login, body, { at = "2026-03-01T10:00:00Z", assoc = "NONE", hidden } = {}) => ({
@@ -610,11 +618,50 @@ const issueProvider = ctx.ui.providerFactories[1](baseProvider);
 const allIssues = await suggest(issueProvider, "fix #");
 check("bare # lists the open issues", values(allIssues).length === ISSUES.length, values(allIssues));
 check("rows carry the issue number", values(allIssues)[0] === "#7");
+
+const unassignedLabel = allIssues.items.find((item) => item.value === "#7")?.label;
+const multiAssigneeLabel = allIssues.items.find((item) => item.value === "#412")?.label;
+const overflowLabel = allIssues.items.find((item) => item.value === "#415")?.label;
+const overflowTag = overflowLabel?.match(/\[[^\]]+\]/)?.[0];
+const assigneeTags = allIssues.items
+  .map((item) => item.label.match(/\[[^\]]+\]/)?.[0])
+  .filter((tag) => tag !== undefined);
+
+check("unassigned issues show [not-assigned]", has(unassignedLabel, "[not-assigned]"));
 check(
-  "rows show number, state and title",
-  has(allIssues.items[1].label, "#412") &&
-    has(allIssues.items[1].label, "[open]") &&
-    has(allIssues.items[1].label, "Login crashes"),
+  "fitting assignees show every plain login",
+  has(multiAssigneeLabel, "[alice, bob]") && !has(multiAssigneeLabel, "[@"),
+  multiAssigneeLabel,
+);
+check(
+  "rows show number, assignees and title",
+  has(multiAssigneeLabel, "#412") &&
+    has(multiAssigneeLabel, "[alice, bob]") &&
+    has(multiAssigneeLabel, "Login crashes"),
+);
+check(
+  "overflowing assignee tags are capped with an ellipsis",
+  overflowTag?.length === 20 && overflowTag.includes("…") && overflowTag.endsWith("]"),
+  overflowTag,
+);
+check(
+  "every assignee tag is at most 20 characters",
+  assigneeTags.length === ISSUES.length && assigneeTags.every((tag) => tag.length <= 20),
+  assigneeTags,
+);
+check("rows no longer show [open]", allIssues.items.every((item) => !has(item.label, "[open]")));
+
+const issueListCall = pi.execCalls.find(
+  (call) => call.cmd === "gh" && call.args[0] === "issue" && call.args[1] === "list",
+);
+const issueListJsonIndex = issueListCall?.args.indexOf("--json") ?? -1;
+check(
+  "the issue list keeps the open filter and requests assignees",
+  issueListCall?.args.includes("--state") &&
+    issueListCall.args[issueListCall.args.indexOf("--state") + 1] === "open" &&
+    issueListJsonIndex >= 0 &&
+    issueListCall.args[issueListJsonIndex + 1] === "number,title,assignees",
+  issueListCall?.args,
 );
 
 const numeric = await suggest(issueProvider, "fix #41");
@@ -625,7 +672,7 @@ check("a text query fuzzy-matches the title", values(fuzzy).includes("#415"), va
 
 check("# replaces rather than stacks on file suggestions", !values(allIssues).some((v) => v.startsWith("@")));
 
-const inserted = issueProvider.applyCompletion(["fix #41"], 0, 7, { value: "#412", label: "#412  [open]  Login crashes on empty password" }, "#41");
+const inserted = issueProvider.applyCompletion(["fix #41"], 0, 7, { value: "#412", label: "#412  [alice, bob]  Login crashes on empty password" }, "#41");
 check(
   "selecting an issue inserts the bracketed reference",
   inserted.lines[0] === "fix [#412 - Login crashes on empty password]",

@@ -125,6 +125,7 @@ const GIT_TIMEOUT_MS = 15_000;
 
 const MAX_ISSUES = 100;
 const MAX_ISSUE_SUGGESTIONS = 20;
+const MAX_ASSIGNEE_TAG_CHARS = 20;
 const GH_AUTH_TIMEOUT_MS = 10_000;
 const GH_LIST_TIMEOUT_MS = 10_000;
 const GH_LIST_ATTEMPTS = 2;
@@ -208,7 +209,7 @@ type CommitInfo = {
 type GitHubIssue = {
 	number: number;
 	title: string;
-	state: string;
+	assignees: Array<{ login: string }>;
 };
 
 /** Which end of an over-long comment thread gets discarded. */
@@ -747,26 +748,34 @@ async function fetchIssueBody(
 	}
 }
 
-const issueStateTag = (issue: GitHubIssue) => `[${issue.state.toLowerCase()}]`;
+function issueAssigneeTag(issue: GitHubIssue): string {
+	const logins = issue.assignees.map((assignee) => assignee.login).join(", ");
+	if (logins.length === 0) return "[not-assigned]";
+
+	const fullTag = `[${logins}]`;
+	if (fullTag.length <= MAX_ASSIGNEE_TAG_CHARS) return fullTag;
+
+	// Keep overflow policy isolated here so it can later become `[multiple]`
+	// without touching issue loading or row layout.
+	return `[${logins.slice(0, MAX_ASSIGNEE_TAG_CHARS - 3)}…]`;
+}
 
 /**
- * Formatting is per-list rather than per-item because the number and state
+ * Formatting is per-list rather than per-item because the number and assignee
  * columns are padded to the widest row *actually being shown*. As with commits
  * there is no `description`, so SelectList gives the row the full terminal
  * width instead of clamping the label to 32 characters.
- *
- * `--state open` means every row reads `[open]` today; the column is built to
- * carry `[closed]` too, not filled with one yet.
  */
 function formatIssueItems(issues: GitHubIssue[]): AutocompleteItem[] {
 	if (issues.length === 0) return [];
-	const numberWidth = Math.max(...issues.map((i) => String(i.number).length));
-	const stateWidth = Math.max(...issues.map((i) => issueStateTag(i).length));
-	return issues.map((issue) => ({
+	const rows = issues.map((issue) => ({ issue, assigneeTag: issueAssigneeTag(issue) }));
+	const numberWidth = Math.max(...issues.map((issue) => String(issue.number).length));
+	const assigneeWidth = Math.max(...rows.map((row) => row.assigneeTag.length));
+	return rows.map(({ issue, assigneeTag }) => ({
 		value: `#${issue.number}`,
 		label:
 			`#${String(issue.number).padEnd(numberWidth)}  ` +
-			`${issueStateTag(issue).padEnd(stateWidth)}  ${issue.title}`,
+			`${assigneeTag.padEnd(assigneeWidth)}  ${issue.title}`,
 	}));
 }
 
@@ -1134,7 +1143,7 @@ export default function (pi: ExtensionAPI): void {
 						"--limit",
 						String(MAX_ISSUES),
 						"--json",
-						"number,title,state",
+						"number,title,assignees",
 					],
 					{ cwd, timeout: GH_LIST_TIMEOUT_MS },
 				);
