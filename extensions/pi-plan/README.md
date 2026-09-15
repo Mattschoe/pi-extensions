@@ -57,8 +57,15 @@ A simple TODO execution tracker, much like Claude Code's
 pi install npm:@mattschoe/pi-plan
 ```
 
-Requires Pi `0.80.4` or newer for the `agent_settled` lifecycle event used to begin approved
-same-chat plans with a freshly rebuilt permission-mode prompt.
+Requires Pi `0.80.4` or newer for the `agent_settled` lifecycle event and display-only entry
+renderers.
+
+### Same-chat approval flow
+
+After you approve a plan for execution in the current chat, the plan's TODO card is recorded as
+TUI-only session data. Once the planning run has fully settled, Pi displays one generated user message
+that starts implementation with a freshly rebuilt permission-mode prompt. That generated message is
+expected; there should not be another assistant-authored plan between the TODO card and the kickoff.
 
 ## Modes
 

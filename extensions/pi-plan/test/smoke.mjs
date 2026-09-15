@@ -30,6 +30,8 @@ process.env.PI_CODING_AGENT_DIR = AGENT_DIR;
 // ---------------------------------------------------------------------------
 
 const piRequire = createRequire(join(PI_DIR, "package.json"));
+const { initTheme } = await import(pathToFileURL(join(PI_DIR, "dist", "index.js")).href);
+initTheme("dark", false);
 // jiti/static is only exported under the "import" condition, so require.resolve
 // can't see it — resolve the physical file like the loader does.
 const jitiStaticFile = join(PI_DIR, "node_modules", "jiti", "lib", "jiti-static.mjs");
@@ -55,6 +57,8 @@ function makeFakePi({ bashHasReason = false } = {}) {
   const flags = new Map();
   const entries = [];
   const sent = [];
+  const agentEndContinuations = [];
+  const entryRenderers = new Map();
   const registeredTools = [];
   const tools = new Map([
     [
@@ -76,20 +80,29 @@ function makeFakePi({ bashHasReason = false } = {}) {
   const api = {
     entries,
     sent,
+    agentEndContinuations,
+    entryRenderers,
     commands,
     shortcuts,
     registeredTools,
+    agentActive: false,
     on(type, handler) {
       const list = handlers.get(type) ?? [];
       list.push(handler);
       handlers.set(type, list);
     },
     emit: async (type, event, ctx) => {
-      const results = [];
-      for (const handler of handlers.get(type) ?? []) {
-        results.push(await handler(event, ctx));
+      const wasAgentActive = api.agentActive;
+      if (type === "agent_end") api.agentActive = true;
+      try {
+        const results = [];
+        for (const handler of handlers.get(type) ?? []) {
+          results.push(await handler(event, ctx));
+        }
+        return results;
+      } finally {
+        api.agentActive = wasAgentActive;
       }
-      return results;
     },
     registerCommand(name, def) {
       commands.set(name, def);
@@ -101,6 +114,9 @@ function makeFakePi({ bashHasReason = false } = {}) {
       registeredTools.push(def);
       tools.set(def.name, def);
     },
+    registerEntryRenderer(customType, renderer) {
+      entryRenderers.set(customType, renderer);
+    },
     getAllTools: () => [...tools.values()],
     registerFlag(name, def) {
       flags.set(name, def.default);
@@ -111,7 +127,13 @@ function makeFakePi({ bashHasReason = false } = {}) {
       entries.push({ type: "custom", customType, data });
     },
     sendMessage(message, options) {
-      sent.push({ kind: "message", message, options });
+      const record = { kind: "message", message, options };
+      sent.push(record);
+      // Pi treats any custom message sent while agent_end is running as a
+      // queued continuation, even when triggerTurn is explicitly false.
+      if (api.agentActive && options?.deliverAs !== "nextTurn") {
+        agentEndContinuations.push(record);
+      }
     },
     sendUserMessage(text, options) {
       sent.push({ kind: "user", text, options });
@@ -220,6 +242,8 @@ section("Registration");
   check("registers /todos", pi.commands.has("todos"));
   check("does not register the retired /plan toggle", !pi.commands.has("plan"));
   check("registers the mode-cycle shortcut on the default key", pi.shortcuts.has("f6"));
+  check("registers the todo-list entry renderer", pi.entryRenderers.has("plan-todo-list"));
+  check("registers the completion entry renderer", pi.entryRenderers.has("plan-complete"));
 }
 
 section("Bash explanation schema");
@@ -278,13 +302,17 @@ section("Mode cycling and prompt injection");
     {
       messages: [
         { role: "user", content: "real message" },
-        { role: "user", customType: "plan-mode-context", content: "[PLAN MODE ACTIVE] ..." },
+        { role: "custom", customType: "plan-mode-context", content: "[PLAN MODE ACTIVE] ..." },
+        { role: "custom", customType: "plan-todo-list", content: "old todo card" },
+        { role: "custom", customType: "plan-complete", content: "old completion card" },
+        { role: "custom", customType: "unrelated", content: "keep me" },
       ],
     },
     ctx,
   );
-  check("stale plan-mode-context messages are dropped", filtered.messages.length === 1);
+  check("legacy plan messages are dropped", filtered.messages.length === 2);
   check("real messages survive the filter", filtered.messages[0].content === "real message");
+  check("unrelated custom messages survive the filter", filtered.messages[1].customType === "unrelated");
 }
 
 section("Tool gating and approval explanations");
@@ -407,11 +435,20 @@ section("Plan capture — option 4 (new chat)");
   check("plan file keeps the plan body", content.includes("# Add retry to config fetch"));
   check("plan file has no injected '# Plan' wrapper", !content.includes("\n# Plan\n"));
 
-  check("todo list is shown", pi.sent.some((s) => s.message?.customType === "plan-todo-list"));
-  check(
-    "extracted both plan steps",
-    pi.sent.find((s) => s.message?.customType === "plan-todo-list")?.message.content.includes("Plan Steps (2)"),
-  );
+  const todoEntry = pi.entries.find((e) => e.customType === "plan-todo-list");
+  check("todo list is stored as a display-only entry", todoEntry?.type === "custom");
+  check("extracted both plan steps", todoEntry?.data.content.includes("Plan Steps (2)"));
+  check("todo list is not sent as a custom message", !pi.sent.some((s) => s.message?.customType === "plan-todo-list"));
+  check("todo display does not queue an agent continuation", pi.agentEndContinuations.length === 0);
+
+  const displayTheme = {
+    ...ctx.ui.theme,
+    bg: identity,
+  };
+  const todoComponent = pi.entryRenderers.get("plan-todo-list")?.(todoEntry, {}, displayTheme);
+  const renderedTodo = todoComponent?.render(100).join("\n") ?? "";
+  check("todo renderer includes its label", renderedTodo.includes("[plan-todo-list]"), renderedTodo);
+  check("todo renderer includes Markdown content", renderedTodo.includes("Plan Steps (2)"), renderedTodo);
   check("dialog offered four options", ctx.ui.selectPrompts[0]?.options.length === 4);
   check("option 4 prefills /plan-approve", ctx.ui.editorText?.startsWith("/plan-approve .pi/plans/add-retry"));
   check("option 4 does not start execution", !pi.entries.some((e) => e.customType === "plan-mode-execute"));
@@ -446,6 +483,7 @@ section("Plan capture — option 1 (execute here) and tracking");
     "kickoff is not queued into the ending plan-mode run",
     !pi.sent.some((s) => s.kind === "user" && s.text.includes("Start with step 1")),
   );
+  check("plan capture queues no custom-message continuation", pi.agentEndContinuations.length === 0);
 
   await pi.emit("agent_settled", {}, ctx);
   const kickoffMessages = pi.sent.filter(
@@ -494,8 +532,44 @@ section("Plan capture — option 1 (execute here) and tracking");
 
   // Verification answered -> plan closes out
   await pi.emit("agent_end", { messages: [] }, ctx);
-  check("plan closes out after verification", pi.sent.some((s) => s.message?.customType === "plan-complete"));
+  const completionEntry = pi.entries.find((e) => e.customType === "plan-complete");
+  check("plan closes out with a display-only entry", completionEntry?.type === "custom");
+  check("verified completion text is retained", completionEntry?.data.content.includes("Plan Verified!"));
+  check("completion is not sent as a custom message", !pi.sent.some((s) => s.message?.customType === "plan-complete"));
+  check("completion display queues no agent continuation", pi.agentEndContinuations.length === 0);
+
+  const completionComponent = pi.entryRenderers.get("plan-complete")?.(
+    completionEntry,
+    {},
+    { ...ctx.ui.theme, bg: identity },
+  );
+  const renderedCompletion = completionComponent?.render(100).join("\n") ?? "";
+  check("completion renderer includes its label", renderedCompletion.includes("[plan-complete]"), renderedCompletion);
+  check("completion renderer includes Markdown content", renderedCompletion.includes("Plan Verified!"), renderedCompletion);
   check("widget is cleared", ctx.ui.widgets.at(-1)?.value === undefined);
+}
+
+section("Completion without success criteria");
+{
+  await rm(join(WORK_DIR, ".pi"), { recursive: true, force: true });
+  const pi = makeFakePi();
+  extension(pi);
+  const ctx = makeCtx(pi, {
+    selectAnswer: (options) => options.find((o) => o.startsWith("1.")),
+  });
+  await pi.emit("session_start", {}, ctx);
+  await pi.shortcuts.get("f6").handler(ctx);
+  await pi.shortcuts.get("f6").handler(ctx); // plan
+
+  const planWithoutDoneWhen = PLAN_TEXT.replace(/\n## Done When[\s\S]*$/, "\n");
+  await pi.emit("agent_end", { messages: [assistant(planWithoutDoneWhen)] }, ctx);
+  await pi.emit("turn_end", { message: assistant("Finished both. [DONE:1] [DONE:2]") }, ctx);
+  await pi.emit("agent_end", { messages: [] }, ctx);
+
+  const completionEntry = pi.entries.find((e) => e.customType === "plan-complete");
+  check("plain completion is stored as a display-only entry", completionEntry?.type === "custom");
+  check("plain completion text is retained", completionEntry?.data.content.includes("Plan Complete!"));
+  check("plain completion queues no agent continuation", pi.agentEndContinuations.length === 0);
 }
 
 section("Todo widget rendering");

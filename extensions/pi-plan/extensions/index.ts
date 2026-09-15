@@ -29,14 +29,17 @@ import {
 	CONFIG_DIR_NAME,
 	createBashToolDefinition,
 	getAgentDir,
+	getMarkdownTheme,
 } from "@earendil-works/pi-coding-agent";
 import {
 	Box,
 	Container,
 	Key,
+	Markdown,
 	matchesKey,
 	SelectList,
 	type SelectItem,
+	Spacer,
 	Text,
 } from "@earendil-works/pi-tui";
 import { spawn } from "node:child_process";
@@ -219,6 +222,16 @@ interface AssistantLike {
 	role: string;
 	content: readonly unknown[];
 }
+
+interface PlanDisplayEntry {
+	content: string;
+}
+
+const LEGACY_CONTEXT_MESSAGE_TYPES = new Set([
+	"plan-mode-context",
+	"plan-todo-list",
+	"plan-complete",
+]);
 
 function isAssistantMessage(message: unknown): message is AssistantLike {
 	if (typeof message !== "object" || message === null) return false;
@@ -702,6 +715,25 @@ export default function planExtension(pi: ExtensionAPI): void {
 	// system prompt, even if the permission mode changed in the meantime.
 	let postSettleUserMessage: string | undefined;
 
+	for (const customType of ["plan-todo-list", "plan-complete"]) {
+		pi.registerEntryRenderer<PlanDisplayEntry>(customType, (entry, _options, theme) => {
+			const content = entry.data?.content;
+			if (!content) return undefined;
+
+			const box = new Box(1, 1, (text) => theme.bg("customMessageBg", text));
+			box.addChild(
+				new Text(theme.fg("customMessageLabel", theme.bold(`[${customType}]`)), 0, 0),
+			);
+			box.addChild(new Spacer(1));
+			box.addChild(
+				new Markdown(content, 0, 0, getMarkdownTheme(), {
+					color: (text) => theme.fg("customMessageText", text),
+				}),
+			);
+			return box;
+		});
+	}
+
 	pi.registerFlag("plan", {
 		description: "Start in plan mode (read-only exploration)",
 		type: "boolean",
@@ -845,13 +877,12 @@ export default function planExtension(pi: ExtensionAPI): void {
 		return result;
 	});
 
-	// Legacy cleanup: an earlier version of this stack injected plan mode as a
-	// hidden per-turn message rather than a system prompt. Those entries persist
-	// in sessions recorded before this package, where they would keep telling the
-	// model that write and edit are disabled long after plan mode was left.
+	// Legacy cleanup: older versions persisted plan-mode instructions and
+	// display-only status cards as custom messages. They remain in model context
+	// on resume unless removed; current status cards use custom entries instead.
 	pi.on("context", async (event) => ({
 		messages: event.messages.filter(
-			(m) => (m as { customType?: string }).customType !== "plan-mode-context",
+			(m) => !LEGACY_CONTEXT_MESSAGE_TYPES.has((m as { customType?: string }).customType ?? ""),
 		),
 	}));
 
@@ -947,14 +978,9 @@ export default function planExtension(pi: ExtensionAPI): void {
 	pi.on("agent_end", async (event, ctx) => {
 		// The model has answered the verification prompt — close the plan out.
 		if (verificationPending) {
-			pi.sendMessage(
-				{
-					customType: "plan-complete",
-					content: `**Plan Verified!** ✓\n\nAll steps completed and success criteria reviewed.`,
-					display: true,
-				},
-				{ triggerTurn: false },
-			);
+			pi.appendEntry<PlanDisplayEntry>("plan-complete", {
+				content: `**Plan Verified!** ✓\n\nAll steps completed and success criteria reviewed.`,
+			});
 			clearTracking(ctx);
 			return;
 		}
@@ -974,14 +1000,9 @@ export default function planExtension(pi: ExtensionAPI): void {
 					`- ✗ Not met — describe what still needs to be done\n\n` +
 					`If any criterion is not fully met, propose concrete next steps.`;
 			} else {
-				pi.sendMessage(
-					{
-						customType: "plan-complete",
-						content: `**Plan Complete!** ✓\n\n${todoItems.map((t) => `~~${t.text}~~`).join("\n")}`,
-						display: true,
-					},
-					{ triggerTurn: false },
-				);
+				pi.appendEntry<PlanDisplayEntry>("plan-complete", {
+					content: `**Plan Complete!** ✓\n\n${todoItems.map((t) => `~~${t.text}~~`).join("\n")}`,
+				});
 				clearTracking(ctx);
 			}
 			return;
@@ -1009,10 +1030,7 @@ export default function planExtension(pi: ExtensionAPI): void {
 				`**Plan Steps (${todoItems.length}):**\n\n` +
 				todoItems.map((t, i) => `${i + 1}. ☐ ${t.text}`).join("\n");
 			if (doneWhenText) summary += `\n\n**Done When:**\n${doneWhenText}`;
-			pi.sendMessage(
-				{ customType: "plan-todo-list", content: summary, display: true },
-				{ triggerTurn: false },
-			);
+			pi.appendEntry<PlanDisplayEntry>("plan-todo-list", { content: summary });
 			if (!doneWhenText) {
 				ctx.ui.notify(
 					'Tip: Add a "## Done When" section to your plan for automatic success verification.',

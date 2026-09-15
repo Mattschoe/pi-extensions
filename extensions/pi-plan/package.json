@@ -1,6 +1,6 @@
 {
   "name": "@mattschoe/pi-plan",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "Plan mode, accept-edits mode, readable bash approval reasons, and plan execution tracking for Pi.",
   "type": "module",
   "license": "MIT",
