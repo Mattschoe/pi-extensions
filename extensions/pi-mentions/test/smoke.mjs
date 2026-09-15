@@ -98,16 +98,33 @@ function makeFakePi(ghResponder) {
 const ghAbsent = () => ({ stdout: "", stderr: "gh: command not found", code: 127, killed: false });
 
 const ISSUES = [
-  { number: 7, title: "Flaky retry on config fetch", assignees: [] },
+  {
+    number: 7,
+    title: "Flaky retry on config fetch",
+    assignees: [],
+    labels: [],
+    projectItems: [],
+  },
   {
     number: 412,
     title: "Login crashes on empty password",
     assignees: [{ login: "alice" }, { login: "bob" }],
+    labels: [
+      { name: "bug", color: "d73a4a" },
+      { name: "auth", color: "1d76db" },
+    ],
+    projectItems: [{ title: "Release roadmap", status: { name: "In progress" } }],
   },
   {
     number: 415,
     title: "Dark mode contrast on badges",
     assignees: [{ login: "alexanderthegreat" }, { login: "bob" }],
+    labels: [{ name: "accessibility", color: "not-hex" }],
+    projectItems: [
+      { title: "UI polish", status: { name: "Todo" } },
+      { title: "Q4 launch", status: null },
+      { title: "UI polish", status: { name: "Duplicate must not display" } },
+    ],
   },
 ];
 
@@ -148,12 +165,25 @@ const bodyFor = (number) =>
     ? Array.from({ length: 40 }, (_, i) => `body line ${i + 1}`).join("\n")
     : `Body of issue ${number}.\nMore.`;
 
-function ghWorking({ authOk = true } = {}) {
+function ghWorking({ authOk = true, projectItemsOk = true } = {}) {
   return (args) => {
     const ok = (stdout) => ({ stdout, stderr: "", code: 0, killed: false });
     const fail = (stderr) => ({ stdout: "", stderr, code: 1, killed: false });
     if (args[0] === "auth") return authOk ? ok("Logged in") : fail("not logged in");
-    if (args[0] === "issue" && args[1] === "list") return ok(JSON.stringify(ISSUES));
+    if (args[0] === "issue" && args[1] === "list") {
+      const fields = (args[args.indexOf("--json") + 1] ?? "").split(",");
+      if (fields.includes("projectItems") && !projectItemsOk) {
+        return fail("field requires one of the following scopes: ['read:project']");
+      }
+      // Mirror gh's JSON exporter: only requested fields are present.
+      return ok(
+        JSON.stringify(
+          ISSUES.map((issue) =>
+            Object.fromEntries(fields.filter((field) => field in issue).map((field) => [field, issue[field]])),
+          ),
+        ),
+      );
+    }
     if (args[0] === "issue" && args[1] === "view") {
       if (args.includes("--web")) return ok("Opening in browser");
       const number = Number.parseInt(args[2], 10);
@@ -169,8 +199,12 @@ function ghWorking({ authOk = true } = {}) {
   };
 }
 
-function makeCtx(cwd, { hasUI = true, editorText = "", selectAnswer } = {}) {
+function makeCtx(
+  cwd,
+  { hasUI = true, editorText = "", selectAnswer, colorMode = "truecolor" } = {},
+) {
   const ui = {
+    theme: { getColorMode: () => colorMode },
     notifications: [],
     widgets: [],
     providerFactories: [],
@@ -601,6 +635,33 @@ check(
   values(dedupedIssuesA).length === ISSUES.length && values(dedupedIssuesB).length === ISSUES.length,
 );
 
+const piNoProjectScope = makeFakePi(ghWorking({ projectItemsOk: false }));
+factory(piNoProjectScope);
+const noProjectScopeCtx = makeCtx(REPO);
+await piNoProjectScope.handler("session_start")({ type: "session_start" }, noProjectScopeCtx);
+const noProjectProvider = noProjectScopeCtx.ui.providerFactories[1](baseProvider);
+const noProjectIssues = await suggest(noProjectProvider, "fix #");
+const noProjectListCalls = piNoProjectScope.execCalls.filter(
+  (call) => call.cmd === "gh" && call.args[0] === "issue" && call.args[1] === "list",
+);
+check("a project-scope failure retries without projectItems", noProjectListCalls.length === 2);
+check(
+  "the fallback retains assignees and labels",
+  noProjectListCalls[1]?.args[noProjectListCalls[1].args.indexOf("--json") + 1] ===
+    "number,title,assignees,labels" &&
+    has(noProjectIssues.items.find((item) => item.value === "#412")?.label, "bug"),
+);
+check(
+  "the fallback omits unavailable project metadata",
+  !has(noProjectIssues.items.find((item) => item.value === "#412")?.label, "Release roadmap"),
+);
+check(
+  "a project-scope failure warns once without disabling suggestions",
+  values(noProjectIssues).length === ISSUES.length &&
+    noProjectScopeCtx.ui.notifications.filter((notification) => notification.level === "warning").length === 1,
+  JSON.stringify(noProjectScopeCtx.ui.notifications),
+);
+
 // ---------------------------------------------------------------------------
 // GitHub working
 // ---------------------------------------------------------------------------
@@ -640,6 +701,30 @@ check(
     has(multiAssigneeLabel, "Login crashes"),
 );
 check(
+  "rows show labels before bracketed project membership",
+  has(multiAssigneeLabel, ") [Release roadmap]") &&
+    has(overflowLabel, "(accessibility) [UI polish] [Q4 launch]") &&
+    overflowLabel?.match(/UI polish/g)?.length === 1,
+  overflowLabel,
+);
+check(
+  "valid label colors use truecolor ANSI inside parentheses",
+  has(multiAssigneeLabel, "(\x1b[38;2;215;58;74mbug\x1b[39m") &&
+    has(multiAssigneeLabel, "\x1b[38;2;29;118;219mauth\x1b[39m)") &&
+    !has(multiAssigneeLabel, "labels:"),
+  JSON.stringify(multiAssigneeLabel),
+);
+check(
+  "invalid label colors remain readable plain text",
+  has(overflowLabel, "(accessibility)") && !has(overflowLabel, "not-hex"),
+  JSON.stringify(overflowLabel),
+);
+check(
+  "issues without labels or projects have no empty metadata markers",
+  !has(unassignedLabel, "  ()") && !has(unassignedLabel, "project:"),
+  unassignedLabel,
+);
+check(
   "overflowing assignee tags are capped with an ellipsis",
   overflowTag?.length === 20 && overflowTag.includes("…") && overflowTag.endsWith("]"),
   overflowTag,
@@ -656,11 +741,12 @@ const issueListCall = pi.execCalls.find(
 );
 const issueListJsonIndex = issueListCall?.args.indexOf("--json") ?? -1;
 check(
-  "the issue list keeps the open filter and requests assignees",
+  "the issue list keeps the open filter and requests enriched metadata",
   issueListCall?.args.includes("--state") &&
     issueListCall.args[issueListCall.args.indexOf("--state") + 1] === "open" &&
     issueListJsonIndex >= 0 &&
-    issueListCall.args[issueListJsonIndex + 1] === "number,title,assignees",
+    issueListCall.args[issueListJsonIndex + 1] ===
+      "number,title,assignees,labels,projectItems",
   issueListCall?.args,
 );
 
@@ -679,6 +765,19 @@ check(
   inserted.lines[0],
 );
 check("cursor lands after the reference", inserted.cursorCol === inserted.lines[0].length);
+check("styled metadata is not inserted into the reference", !inserted.lines[0].includes("\x1b"));
+
+const pi256 = makeFakePi(ghWorking());
+factory(pi256);
+const ctx256 = makeCtx(REPO, { colorMode: "256color" });
+await pi256.handler("session_start")({ type: "session_start" }, ctx256);
+const issueProvider256 = ctx256.ui.providerFactories[1](baseProvider);
+const issues256 = await suggest(issueProvider256, "fix #412");
+check(
+  "256-color terminals receive an xterm color instead of truecolor",
+  has(issues256.items[0]?.label, "\x1b[38;5;") && !has(issues256.items[0]?.label, "\x1b[38;2;"),
+  JSON.stringify(issues256.items[0]?.label),
+);
 
 // The issue body is pre-fetched on selection, so give that microtask chain a turn.
 await new Promise((r) => setTimeout(r, 50));

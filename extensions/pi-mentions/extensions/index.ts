@@ -27,9 +27,10 @@
 //      fire for hex-shaped words (`@dead`, `@cafe`, `@face`), which is never
 //      what anyone means.
 //
-//  - `#` — GitHub issues. `#` autocompletes open issues, inserts
-//      `[#N - Title]`, and injects the full issue body *and its comment thread*
-//      as a separate collapsed message. `alt+g` opens an issue in the browser —
+//  - `#` — GitHub issues. `#` autocompletes open issues with assignees,
+//      Project membership, and colorized labels, inserts `[#N - Title]`, and
+//      injects the full issue body *and its comment thread* as a separate
+//      collapsed message. `alt+g` opens an issue in the browser —
 //      the row highlighted in the `#` popup, else one referenced in the prompt,
 //      else a picker over the loaded issues — and a dim hint under the editor
 //      advertises the key whenever it would do something.
@@ -206,11 +207,25 @@ type CommitInfo = {
 	subject: string;
 };
 
+type GitHubLabel = {
+	name?: string;
+	color?: string;
+};
+
+type GitHubProjectItem = {
+	title?: string;
+	status?: { name?: string } | null;
+};
+
 type GitHubIssue = {
 	number: number;
 	title: string;
 	assignees: Array<{ login: string }>;
+	labels?: GitHubLabel[];
+	projectItems?: GitHubProjectItem[];
 };
+
+type ColorMode = "truecolor" | "256color";
 
 /** Which end of an over-long comment thread gets discarded. */
 type DropComments = "oldest" | "middle" | "newest";
@@ -760,13 +775,107 @@ function issueAssigneeTag(issue: GitHubIssue): string {
 	return `[${logins.slice(0, MAX_ASSIGNEE_TAG_CHARS - 3)}…]`;
 }
 
+const COLOR_CUBE_VALUES = [0, 95, 135, 175, 215, 255] as const;
+const COLOR_GRAY_VALUES = Array.from({ length: 24 }, (_, index) => 8 + index * 10);
+
+function closestColorIndex(value: number, candidates: readonly number[]): number {
+	let closest = 0;
+	let distance = Number.POSITIVE_INFINITY;
+	for (let index = 0; index < candidates.length; index += 1) {
+		const nextDistance = Math.abs(value - candidates[index]!);
+		if (nextDistance < distance) {
+			closest = index;
+			distance = nextDistance;
+		}
+	}
+	return closest;
+}
+
+function colorDistance(
+	left: readonly [number, number, number],
+	right: readonly [number, number, number],
+): number {
+	const red = left[0] - right[0];
+	const green = left[1] - right[1];
+	const blue = left[2] - right[2];
+	return red * red * 0.299 + green * green * 0.587 + blue * blue * 0.114;
+}
+
+/** Map an RGB label color to the nearest xterm-256 cube or grayscale entry. */
+function rgbTo256(red: number, green: number, blue: number): number {
+	const redIndex = closestColorIndex(red, COLOR_CUBE_VALUES);
+	const greenIndex = closestColorIndex(green, COLOR_CUBE_VALUES);
+	const blueIndex = closestColorIndex(blue, COLOR_CUBE_VALUES);
+	const cube: [number, number, number] = [
+		COLOR_CUBE_VALUES[redIndex]!,
+		COLOR_CUBE_VALUES[greenIndex]!,
+		COLOR_CUBE_VALUES[blueIndex]!,
+	];
+	const cubeColor = 16 + 36 * redIndex + 6 * greenIndex + blueIndex;
+
+	const gray = Math.round(0.299 * red + 0.587 * green + 0.114 * blue);
+	const grayIndex = closestColorIndex(gray, COLOR_GRAY_VALUES);
+	const grayValue = COLOR_GRAY_VALUES[grayIndex]!;
+	const grayscale: [number, number, number] = [grayValue, grayValue, grayValue];
+
+	// Preserve a visible hue unless the source is effectively neutral, matching
+	// pi's own theme conversion rather than washing muted labels out to gray.
+	const spread = Math.max(red, green, blue) - Math.min(red, green, blue);
+	if (
+		spread < 10 &&
+		colorDistance([red, green, blue], grayscale) < colorDistance([red, green, blue], cube)
+	) {
+		return 232 + grayIndex;
+	}
+	return cubeColor;
+}
+
+/** Color one label with GitHub's six-digit RGB value, or leave it plain. */
+function formatIssueLabel(label: GitHubLabel, colorMode: ColorMode): string | undefined {
+	const name = label.name?.trim();
+	if (!name) return undefined;
+	const color = label.color?.trim();
+	if (!color || !/^[0-9a-f]{6}$/i.test(color)) return name;
+
+	const red = Number.parseInt(color.slice(0, 2), 16);
+	const green = Number.parseInt(color.slice(2, 4), 16);
+	const blue = Number.parseInt(color.slice(4, 6), 16);
+	const ansi =
+		colorMode === "truecolor"
+			? `\x1b[38;2;${red};${green};${blue}m`
+			: `\x1b[38;5;${rgbTo256(red, green, blue)}m`;
+	return `${ansi}${name}\x1b[39m`;
+}
+
+function uniqueNonEmpty(values: Array<string | undefined>): string[] {
+	return [
+		...new Set(
+			values
+				.map((value) => value?.trim())
+				.filter((value): value is string => Boolean(value)),
+		),
+	];
+}
+
+function issueMetadata(issue: GitHubIssue, colorMode: ColorMode): string {
+	const projects = uniqueNonEmpty((issue.projectItems ?? []).map((item) => item.title));
+	const labels = (issue.labels ?? [])
+		.map((label) => formatIssueLabel(label, colorMode))
+		.filter((label): label is string => label !== undefined);
+	const parts: string[] = [];
+	if (labels.length > 0) parts.push(`(${labels.join(", ")})`);
+	parts.push(...projects.map((project) => `[${project}]`));
+	return parts.length > 0 ? `  ${parts.join(" ")}` : "";
+}
+
 /**
  * Formatting is per-list rather than per-item because the number and assignee
  * columns are padded to the widest row *actually being shown*. As with commits
  * there is no `description`, so SelectList gives the row the full terminal
- * width instead of clamping the label to 32 characters.
+ * width instead of clamping the label to 32 characters. pi-tui's width and
+ * truncation helpers understand the ANSI sequences used for label colors.
  */
-function formatIssueItems(issues: GitHubIssue[]): AutocompleteItem[] {
+function formatIssueItems(issues: GitHubIssue[], colorMode: ColorMode): AutocompleteItem[] {
 	if (issues.length === 0) return [];
 	const rows = issues.map((issue) => ({ issue, assigneeTag: issueAssigneeTag(issue) }));
 	const numberWidth = Math.max(...issues.map((issue) => String(issue.number).length));
@@ -775,7 +884,8 @@ function formatIssueItems(issues: GitHubIssue[]): AutocompleteItem[] {
 		value: `#${issue.number}`,
 		label:
 			`#${String(issue.number).padEnd(numberWidth)}  ` +
-			`${assigneeTag.padEnd(assigneeWidth)}  ${issue.title}`,
+			`${assigneeTag.padEnd(assigneeWidth)}  ${issue.title}` +
+			issueMetadata(issue, colorMode),
 	}));
 }
 
@@ -807,6 +917,7 @@ function createIssueMentionSpec(
 	getIssues: () => Promise<GitHubIssue[] | undefined>,
 	lookupIssue: (issueNumber: number) => GitHubIssue | undefined,
 	onIssueSelected: (issueNumber: number) => void,
+	colorMode: ColorMode,
 ): MentionSpec {
 	return {
 		triggerCharacters: ["#"],
@@ -817,7 +928,7 @@ function createIssueMentionSpec(
 			// Issue suggestions replace rather than stack: `#` has no builtin meaning.
 			if (!issues || issues.length === 0) return { items: [], placement: "replace" };
 			return {
-				items: formatIssueItems(filterIssues(issues, token.slice(1))),
+				items: formatIssueItems(filterIssues(issues, token.slice(1)), colorMode),
 				placement: "replace",
 			};
 		},
@@ -832,7 +943,7 @@ function createIssueMentionSpec(
 
 			// The title comes from the loaded issue list rather than by parsing it
 			// back out of the label, which is both more robust and independent of
-			// the display format. The fallback strips `#N` and the state column for
+			// the display format. The fallback strips `#N` and the assignee column for
 			// a number outside the loaded set (hand-typed, or a stale list).
 			const issueTitle =
 				lookupIssue(issueNumber)?.title ??
@@ -1061,6 +1172,7 @@ export default function (pi: ExtensionAPI): void {
 	let mentionsEditor: MentionsEditor | undefined;
 	let loadErrorShown = false;
 	let loadSuccessShown = false;
+	let projectWarningShown = false;
 
 	// -----------------------------------------------------------------------
 	// Session lifetime
@@ -1094,7 +1206,7 @@ export default function (pi: ExtensionAPI): void {
 		const cwd = ctx.cwd;
 
 		/** `ctx.ui` is only safe while this session still owns the UI. */
-		const notify = (message: string, level: "info" | "error"): void => {
+		const notify = (message: string, level: "info" | "warning" | "error"): void => {
 			if (!sessionActive) return;
 			ctx.ui.notify(message, level);
 		};
@@ -1131,29 +1243,55 @@ export default function (pi: ExtensionAPI): void {
 				// Do not call pi.exec again through the now-stale extension runtime.
 				if (!sessionActive) return undefined;
 
-				const result = await pi.exec(
-					"gh",
-					[
-						"issue",
-						"list",
-						"--repo",
-						repo,
-						"--state",
-						"open",
-						"--limit",
-						String(MAX_ISSUES),
-						"--json",
-						"number,title,assignees",
-					],
-					{ cwd, timeout: GH_LIST_TIMEOUT_MS },
-				);
+				const listIssues = (fields: string): Promise<ExecResult> =>
+					pi.exec(
+						"gh",
+						[
+							"issue",
+							"list",
+							"--repo",
+							repo,
+							"--state",
+							"open",
+							"--limit",
+							String(MAX_ISSUES),
+							"--json",
+							fields,
+						],
+						{ cwd, timeout: GH_LIST_TIMEOUT_MS },
+					);
+
+				let result = await listIssues("number,title,assignees,labels,projectItems");
 
 				// The session can be replaced while the subprocess is in flight.
 				if (!sessionActive) return undefined;
 
 				if (!execSucceeded(result)) {
-					lastFailure = { kind: "exec", result };
-					continue;
+					// A normal gh failure can be a missing read:project scope or a host
+					// without Project V2 support. Retry without projectItems so labels
+					// and ordinary issue completion remain available. Timeouts retain
+					// the existing retry policy instead of doubling network work.
+					if (!result.killed) {
+						const projectError = execFailureDetails(result, GH_LIST_TIMEOUT_MS);
+						const fallback = await listIssues("number,title,assignees,labels");
+						if (!sessionActive) return undefined;
+						if (execSucceeded(fallback)) {
+							result = fallback;
+							if (!projectWarningShown) {
+								projectWarningShown = true;
+								notify(
+									`mentions: project metadata unavailable; showing issues with labels only (${projectError})`,
+									"warning",
+								);
+							}
+						} else {
+							lastFailure = { kind: "exec", result: fallback };
+							continue;
+						}
+					} else {
+						lastFailure = { kind: "exec", result };
+						continue;
+					}
 				}
 
 				try {
@@ -1220,10 +1358,11 @@ export default function (pi: ExtensionAPI): void {
 		const lookupIssue = (issueNumber: number): GitHubIssue | undefined =>
 			loadedIssues.find((issue) => issue.number === issueNumber);
 
+		const colorMode = ctx.ui.theme.getColorMode();
 		ctx.ui.addAutocompleteProvider((current) =>
 			createMentionProvider(
 				current,
-				createIssueMentionSpec(getIssues, lookupIssue, onIssueSelected),
+				createIssueMentionSpec(getIssues, lookupIssue, onIssueSelected, colorMode),
 			),
 		);
 

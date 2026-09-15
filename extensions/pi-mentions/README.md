@@ -6,8 +6,11 @@ before the model sees them.
 ## What it does
 Adds the ability to `@mention` a lot of different Git and Github items that is useful for context in specific tasks.
 More specifically you can
-- `#<issue_number>` to inject a Github Issue and immediately begin implementing. 
-  If you check the commit you can open it in the browser with `alt+g`.
+- `#<issue_number>` to inject a Github Issue and immediately begin implementing.
+  The autocomplete rows show assignees, labels in their GitHub colors as `(label, label)`,
+  and Project membership as `[Project]` after the labels.
+  If Project metadata is unavailable (for example, without `read:project` access), issue and
+  label completion still works. You can open the selected issue in the browser with `alt+g`.
 - `@<git_hash>` to inject a whole commit, useful for giving context for fixing or adding features.
 - `@uncommited` to inject all current uncommited changes
 
