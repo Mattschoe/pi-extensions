@@ -27,10 +27,11 @@
 //      fire for hex-shaped words (`@dead`, `@cafe`, `@face`), which is never
 //      what anyone means.
 //
-//  - `#` — GitHub issues. `#` autocompletes open issues with assignees,
-//      Project membership, and colorized labels, inserts `[#N - Title]`, and
-//      injects the full issue body *and its comment thread* as a separate
-//      collapsed message. `alt+g` opens an issue in the browser —
+//  - `#` — GitHub issues. `#` autocompletes open issues in responsive aligned
+//      columns for assignees, titles, colorized labels, and right-anchored
+//      Project membership, inserts `[#N - Title]`, and injects the full issue
+//      body *and its comment thread* as a separate collapsed message. `alt+g`
+//      opens an issue in the browser —
 //      the row highlighted in the `#` popup, else one referenced in the prompt,
 //      else a picker over the loaded issues — and a dim hint under the editor
 //      advertises the key whenever it would do something.
@@ -107,7 +108,10 @@ import {
 	type AutocompleteProvider,
 	type AutocompleteSuggestions,
 	fuzzyFilter,
+	sliceByColumn,
 	Text,
+	truncateToWidth,
+	visibleWidth,
 } from "@earendil-works/pi-tui";
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -126,7 +130,11 @@ const GIT_TIMEOUT_MS = 15_000;
 
 const MAX_ISSUES = 100;
 const MAX_ISSUE_SUGGESTIONS = 20;
-const MAX_ASSIGNEE_TAG_CHARS = 20;
+const MAX_ASSIGNEE_TAG_WIDTH = 20;
+const MAX_ISSUE_TITLE_WIDTH = 60;
+const MAX_ISSUE_LABEL_WIDTH = 20;
+const MAX_ISSUE_PROJECT_TAG_WIDTH = 24;
+const ISSUE_COLUMN_GAP = 2;
 const GH_AUTH_TIMEOUT_MS = 10_000;
 const GH_LIST_TIMEOUT_MS = 10_000;
 const GH_LIST_ATTEMPTS = 2;
@@ -226,6 +234,49 @@ type GitHubIssue = {
 };
 
 type ColorMode = "truecolor" | "256color";
+
+type IssueDisplayLabel = {
+	name: string;
+	color?: string;
+};
+
+type IssueDisplayRow = {
+	issue: GitHubIssue;
+	assignee: string;
+	labels: IssueDisplayLabel[];
+	projects: string[];
+};
+
+type IssueListDisplay = {
+	rows: IssueDisplayRow[];
+	numberWidth: number;
+	colorMode: ColorMode;
+	naturalWidth: number;
+	resolvedByWidth: Map<number, ResolvedIssueLayout>;
+};
+
+type IssueAutocompleteItem = AutocompleteItem & {
+	piMentionsIssue: {
+		row: IssueDisplayRow;
+		list: IssueListDisplay;
+	};
+};
+
+type IssueColumnWidths = {
+	assignee: number;
+	title: number;
+	labels: number;
+	projects: number;
+};
+
+type ResolvedIssueLayout = {
+	tooNarrow: boolean;
+	labelCount: number;
+	projectCount: number;
+	labelsActive: boolean;
+	projectsActive: boolean;
+	widths: IssueColumnWidths;
+};
 
 /** Which end of an over-long comment thread gets discarded. */
 type DropComments = "oldest" | "middle" | "newest";
@@ -763,16 +814,11 @@ async function fetchIssueBody(
 	}
 }
 
-function issueAssigneeTag(issue: GitHubIssue): string {
-	const logins = issue.assignees.map((assignee) => assignee.login).join(", ");
-	if (logins.length === 0) return "[not-assigned]";
-
-	const fullTag = `[${logins}]`;
-	if (fullTag.length <= MAX_ASSIGNEE_TAG_CHARS) return fullTag;
-
-	// Keep overflow policy isolated here so it can later become `[multiple]`
-	// without touching issue loading or row layout.
-	return `[${logins.slice(0, MAX_ASSIGNEE_TAG_CHARS - 3)}…]`;
+function issueAssigneeText(issue: GitHubIssue): string {
+	const logins = (issue.assignees ?? [])
+		.map((assignee) => assignee.login?.trim())
+		.filter((login): login is string => Boolean(login));
+	return logins.length > 0 ? logins.join(", ") : "not-assigned";
 }
 
 const COLOR_CUBE_VALUES = [0, 95, 135, 175, 215, 255] as const;
@@ -830,12 +876,10 @@ function rgbTo256(red: number, green: number, blue: number): number {
 	return cubeColor;
 }
 
-/** Color one label with GitHub's six-digit RGB value, or leave it plain. */
-function formatIssueLabel(label: GitHubLabel, colorMode: ColorMode): string | undefined {
-	const name = label.name?.trim();
-	if (!name) return undefined;
+/** Apply one label's GitHub color after truncation, or leave it plain. */
+function colorIssueLabel(label: IssueDisplayLabel, text: string, colorMode: ColorMode): string {
 	const color = label.color?.trim();
-	if (!color || !/^[0-9a-f]{6}$/i.test(color)) return name;
+	if (!color || !/^[0-9a-f]{6}$/i.test(color)) return text;
 
 	const red = Number.parseInt(color.slice(0, 2), 16);
 	const green = Number.parseInt(color.slice(2, 4), 16);
@@ -844,7 +888,7 @@ function formatIssueLabel(label: GitHubLabel, colorMode: ColorMode): string | un
 		colorMode === "truecolor"
 			? `\x1b[38;2;${red};${green};${blue}m`
 			: `\x1b[38;5;${rgbTo256(red, green, blue)}m`;
-	return `${ansi}${name}\x1b[39m`;
+	return `${ansi}${text}\x1b[39m`;
 }
 
 function uniqueNonEmpty(values: Array<string | undefined>): string[] {
@@ -857,36 +901,335 @@ function uniqueNonEmpty(values: Array<string | undefined>): string[] {
 	];
 }
 
-function issueMetadata(issue: GitHubIssue, colorMode: ColorMode): string {
-	const projects = uniqueNonEmpty((issue.projectItems ?? []).map((item) => item.title));
-	const labels = (issue.labels ?? [])
-		.map((label) => formatIssueLabel(label, colorMode))
-		.filter((label): label is string => label !== undefined);
-	const parts: string[] = [];
-	if (labels.length > 0) parts.push(`(${labels.join(", ")})`);
-	parts.push(...projects.map((project) => `[${project}]`));
-	return parts.length > 0 ? `  ${parts.join(" ")}` : "";
+/** Truncate unstyled text by terminal cells without injecting an ANSI reset. */
+function truncatePlain(text: string, maxWidth: number): string {
+	if (maxWidth <= 0) return "";
+	if (visibleWidth(text) <= maxWidth) return text;
+	if (maxWidth === 1) return "…";
+	return `${sliceByColumn(text, 0, maxWidth - 1, true)}…`;
+}
+
+function padVisibleEnd(text: string, width: number): string {
+	return text + " ".repeat(Math.max(0, width - visibleWidth(text)));
+}
+
+function padVisibleStart(text: string, width: number): string {
+	return " ".repeat(Math.max(0, width - visibleWidth(text))) + text;
+}
+
+function formatBracketed(text: string, maxWidth: number): string {
+	if (maxWidth <= 0) return "";
+	if (maxWidth === 1) return "…";
+	if (maxWidth === 2) return "[]";
+	return `[${truncatePlain(text, maxWidth - 2)}]`;
+}
+
+function sum(values: readonly number[]): number {
+	return values.reduce((total, value) => total + value, 0);
 }
 
 /**
- * Formatting is per-list rather than per-item because the number and assignee
- * columns are padded to the widest row *actually being shown*. As with commits
- * there is no `description`, so SelectList gives the row the full terminal
- * width instead of clamping the label to 32 characters. pi-tui's width and
- * truncation helpers understand the ANSI sequences used for label colors.
+ * Share a deficit by each element's shrinkable width. Longer elements lose
+ * more cells, while every element above its minimum participates.
+ */
+function allocateWeightedWidths(
+	preferred: readonly number[],
+	minimum: readonly number[],
+	available: number,
+): number[] {
+	const preferredTotal = sum(preferred);
+	if (available >= preferredTotal) return [...preferred];
+	const minimumTotal = sum(minimum);
+	if (available <= minimumTotal) return [...minimum];
+
+	const capacities = preferred.map((width, index) => width - (minimum[index] ?? 0));
+	const capacityTotal = sum(capacities);
+	const deficit = preferredTotal - available;
+	if (capacityTotal <= 0 || deficit <= 0) return [...preferred];
+
+	const exactReductions = capacities.map((capacity) => (deficit * capacity) / capacityTotal);
+	const reductions = exactReductions.map((reduction) => Math.floor(reduction));
+	let remainder = deficit - sum(reductions);
+	const ranked = exactReductions
+		.map((reduction, index) => ({
+			index,
+			fraction: reduction - Math.floor(reduction),
+			capacity: capacities[index] ?? 0,
+		}))
+		.sort(
+			(left, right) =>
+				right.fraction - left.fraction ||
+				right.capacity - left.capacity ||
+				left.index - right.index,
+		);
+	for (const entry of ranked) {
+		if (remainder <= 0) break;
+		if ((reductions[entry.index] ?? 0) >= entry.capacity) continue;
+		reductions[entry.index] = (reductions[entry.index] ?? 0) + 1;
+		remainder -= 1;
+	}
+
+	return preferred.map((width, index) => width - (reductions[index] ?? 0));
+}
+
+function preferredLabelGroupWidth(labels: readonly IssueDisplayLabel[]): number {
+	if (labels.length === 0) return 0;
+	return (
+		2 +
+		labels.reduce(
+			(total, label) => total + Math.min(visibleWidth(label.name), MAX_ISSUE_LABEL_WIDTH),
+			0,
+		) +
+		ISSUE_COLUMN_GAP * (labels.length - 1)
+	);
+}
+
+function minimumLabelGroupWidth(count: number): number {
+	return count === 0 ? 0 : 2 + count + ISSUE_COLUMN_GAP * (count - 1);
+}
+
+function preferredProjectGroupWidth(projects: readonly string[]): number {
+	return projects.reduce(
+		(total, project, index) =>
+			total +
+			(index > 0 ? 1 : 0) +
+			Math.min(visibleWidth(project) + 2, MAX_ISSUE_PROJECT_TAG_WIDTH),
+		0,
+	);
+}
+
+function minimumProjectGroupWidth(count: number): number {
+	return count === 0 ? 0 : count * 3 + (count - 1);
+}
+
+type IssueColumnMetrics = {
+	labelsActive: boolean;
+	projectsActive: boolean;
+	fixedWidth: number;
+	preferred: IssueColumnWidths;
+	minimum: IssueColumnWidths;
+};
+
+function issueColumnMetrics(
+	list: IssueListDisplay,
+	labelCount: number,
+	projectCount: number,
+): IssueColumnMetrics {
+	const labelsActive = labelCount > 0 && list.rows.some((row) => row.labels.length > 0);
+	const projectsActive = projectCount > 0 && list.rows.some((row) => row.projects.length > 0);
+	const columnCount = 3 + Number(labelsActive) + Number(projectsActive);
+	const maxAcrossRows = (measure: (row: IssueDisplayRow) => number): number =>
+		list.rows.reduce((widest, row) => Math.max(widest, measure(row)), 0);
+
+	return {
+		labelsActive,
+		projectsActive,
+		fixedWidth: list.numberWidth + ISSUE_COLUMN_GAP * (columnCount - 1),
+		preferred: {
+			assignee: maxAcrossRows((row) =>
+				Math.min(visibleWidth(`[${row.assignee}]`), MAX_ASSIGNEE_TAG_WIDTH),
+			),
+			title: Math.max(
+				1,
+				maxAcrossRows((row) => Math.min(visibleWidth(row.issue.title), MAX_ISSUE_TITLE_WIDTH)),
+			),
+			labels: labelsActive
+				? maxAcrossRows((row) => preferredLabelGroupWidth(row.labels.slice(0, labelCount)))
+				: 0,
+			projects: projectsActive
+				? maxAcrossRows((row) => preferredProjectGroupWidth(row.projects.slice(0, projectCount)))
+				: 0,
+		},
+		minimum: {
+			assignee: 3,
+			title: 1,
+			labels: labelsActive
+				? maxAcrossRows((row) => minimumLabelGroupWidth(row.labels.slice(0, labelCount).length))
+				: 0,
+			projects: projectsActive
+				? maxAcrossRows((row) => minimumProjectGroupWidth(row.projects.slice(0, projectCount).length))
+				: 0,
+		},
+	};
+}
+
+function resolveIssueLayout(list: IssueListDisplay, maxWidth: number): ResolvedIssueLayout {
+	const cached = list.resolvedByWidth.get(maxWidth);
+	if (cached) return cached;
+
+	let labelCount = list.rows.reduce((largest, row) => Math.max(largest, row.labels.length), 0);
+	let projectCount = list.rows.reduce((largest, row) => Math.max(largest, row.projects.length), 0);
+	let metrics = issueColumnMetrics(list, labelCount, projectCount);
+	const minimumTotal = (): number => metrics.fixedWidth + sum(Object.values(metrics.minimum));
+
+	// Preserve all metadata until every retained element would already be at its
+	// one-cell ellipsis form. At that point projects disappear before labels.
+	while (projectCount > 0 && minimumTotal() > maxWidth) {
+		projectCount -= 1;
+		metrics = issueColumnMetrics(list, labelCount, projectCount);
+	}
+	while (labelCount > 0 && minimumTotal() > maxWidth) {
+		labelCount -= 1;
+		metrics = issueColumnMetrics(list, labelCount, projectCount);
+	}
+
+	if (minimumTotal() > maxWidth) {
+		const tooNarrow: ResolvedIssueLayout = {
+			tooNarrow: true,
+			labelCount: 0,
+			projectCount: 0,
+			labelsActive: false,
+			projectsActive: false,
+			widths: { assignee: 0, title: 0, labels: 0, projects: 0 },
+		};
+		list.resolvedByWidth.set(maxWidth, tooNarrow);
+		return tooNarrow;
+	}
+
+	const keys: Array<keyof IssueColumnWidths> = ["assignee", "title"];
+	if (metrics.labelsActive) keys.push("labels");
+	if (metrics.projectsActive) keys.push("projects");
+	const allocated = allocateWeightedWidths(
+		keys.map((key) => metrics.preferred[key]),
+		keys.map((key) => metrics.minimum[key]),
+		maxWidth - metrics.fixedWidth,
+	);
+	const widths: IssueColumnWidths = { assignee: 0, title: 0, labels: 0, projects: 0 };
+	keys.forEach((key, index) => {
+		widths[key] = allocated[index] ?? 0;
+	});
+
+	const resolved: ResolvedIssueLayout = {
+		tooNarrow: false,
+		labelCount,
+		projectCount,
+		labelsActive: metrics.labelsActive,
+		projectsActive: metrics.projectsActive,
+		widths,
+	};
+	list.resolvedByWidth.set(maxWidth, resolved);
+	return resolved;
+}
+
+function formatLabelGroup(
+	labels: readonly IssueDisplayLabel[],
+	maxWidth: number,
+	colorMode: ColorMode,
+): string {
+	if (labels.length === 0 || maxWidth <= 0) return "";
+	const overhead = 2 + ISSUE_COLUMN_GAP * (labels.length - 1);
+	const preferred = labels.map((label) =>
+		Math.min(visibleWidth(label.name), MAX_ISSUE_LABEL_WIDTH),
+	);
+	const widths = allocateWeightedWidths(preferred, labels.map(() => 1), maxWidth - overhead);
+	const rendered = labels.map((label, index) =>
+		colorIssueLabel(label, truncatePlain(label.name, widths[index] ?? 1), colorMode),
+	);
+	return `(${rendered.join(", ")})`;
+}
+
+function formatProjectGroup(projects: readonly string[], maxWidth: number): string {
+	if (projects.length === 0 || maxWidth <= 0) return "";
+	const overhead = projects.length * 2 + (projects.length - 1);
+	const preferred = projects.map((project) =>
+		Math.min(visibleWidth(project), MAX_ISSUE_PROJECT_TAG_WIDTH - 2),
+	);
+	const widths = allocateWeightedWidths(preferred, projects.map(() => 1), maxWidth - overhead);
+	return projects
+		.map((project, index) => `[${truncatePlain(project, widths[index] ?? 1)}]`)
+		.join(" ");
+}
+
+function formatIssueRow(
+	row: IssueDisplayRow,
+	list: IssueListDisplay,
+	maxWidth: number,
+): string {
+	const layout = resolveIssueLayout(list, maxWidth);
+	if (layout.tooNarrow) {
+		const core = `#${row.issue.number}  [${row.assignee}]  ${row.issue.title}`;
+		return truncateToWidth(core, maxWidth, "…");
+	}
+
+	const number = padVisibleEnd(`#${row.issue.number}`, list.numberWidth);
+	const assignee = padVisibleEnd(
+		formatBracketed(row.assignee, layout.widths.assignee),
+		layout.widths.assignee,
+	);
+	const title = padVisibleEnd(
+		truncatePlain(row.issue.title, layout.widths.title),
+		layout.widths.title,
+	);
+	let result = `${number}${" ".repeat(ISSUE_COLUMN_GAP)}${assignee}`;
+	result += `${" ".repeat(ISSUE_COLUMN_GAP)}${title}`;
+
+	if (layout.labelsActive) {
+		const labels = formatLabelGroup(
+			row.labels.slice(0, layout.labelCount),
+			layout.widths.labels,
+			list.colorMode,
+		);
+		result += `${" ".repeat(ISSUE_COLUMN_GAP)}${padVisibleEnd(labels, layout.widths.labels)}`;
+	}
+
+	if (layout.projectsActive) {
+		const projects = formatProjectGroup(
+			row.projects.slice(0, layout.projectCount),
+			layout.widths.projects,
+		);
+		const projectStart = maxWidth - layout.widths.projects;
+		result += " ".repeat(Math.max(ISSUE_COLUMN_GAP, projectStart - visibleWidth(result)));
+		result += padVisibleStart(projects, layout.widths.projects);
+	}
+
+	return result;
+}
+
+function isIssueAutocompleteItem(item: AutocompleteItem | null | undefined): item is IssueAutocompleteItem {
+	return Boolean(item && "piMentionsIssue" in item);
+}
+
+/**
+ * Every item carries the same per-suggestion-list layout model. Its static label
+ * is the capped natural-width fallback; MentionsEditor reformats it with the
+ * SelectList's actual width on every render.
  */
 function formatIssueItems(issues: GitHubIssue[], colorMode: ColorMode): AutocompleteItem[] {
 	if (issues.length === 0) return [];
-	const rows = issues.map((issue) => ({ issue, assigneeTag: issueAssigneeTag(issue) }));
-	const numberWidth = Math.max(...issues.map((issue) => String(issue.number).length));
-	const assigneeWidth = Math.max(...rows.map((row) => row.assigneeTag.length));
-	return rows.map(({ issue, assigneeTag }) => ({
-		value: `#${issue.number}`,
-		label:
-			`#${String(issue.number).padEnd(numberWidth)}  ` +
-			`${assigneeTag.padEnd(assigneeWidth)}  ${issue.title}` +
-			issueMetadata(issue, colorMode),
+	const rows: IssueDisplayRow[] = issues.map((issue) => ({
+		issue,
+		assignee: issueAssigneeText(issue),
+		labels: (issue.labels ?? [])
+			.map((label) => ({ name: label.name?.trim() ?? "", color: label.color }))
+			.filter((label) => label.name !== ""),
+		projects: uniqueNonEmpty((issue.projectItems ?? []).map((item) => item.title)),
 	}));
+	const list: IssueListDisplay = {
+		rows,
+		numberWidth: rows.reduce(
+			(widest, row) => Math.max(widest, visibleWidth(`#${row.issue.number}`)),
+			0,
+		),
+		colorMode,
+		naturalWidth: 0,
+		resolvedByWidth: new Map(),
+	};
+	const naturalMetrics = issueColumnMetrics(
+		list,
+		rows.reduce((largest, row) => Math.max(largest, row.labels.length), 0),
+		rows.reduce((largest, row) => Math.max(largest, row.projects.length), 0),
+	);
+	list.naturalWidth = naturalMetrics.fixedWidth + sum(Object.values(naturalMetrics.preferred));
+
+	return rows.map((row) => {
+		const item: IssueAutocompleteItem = {
+			value: `#${row.issue.number}`,
+			label: "",
+			piMentionsIssue: { row, list },
+		};
+		item.label = formatIssueRow(row, list, list.naturalWidth);
+		return item;
+	});
 }
 
 function filterIssues(issues: GitHubIssue[], query: string): GitHubIssue[] {
@@ -941,11 +1284,11 @@ function createIssueMentionSpec(
 				return current.applyCompletion(lines, cursorLine, cursorCol, item, prefix);
 			}
 
-			// The title comes from the loaded issue list rather than by parsing it
-			// back out of the label, which is both more robust and independent of
-			// the display format. The fallback strips `#N` and the assignee column for
-			// a number outside the loaded set (hand-typed, or a stale list).
+			// Keep completion independent of the responsive/ANSI display. Structured
+			// issue items carry the full title; loadedIssues and textual parsing are
+			// fallbacks for foreign, hand-built, or stale items.
 			const issueTitle =
+				(isIssueAutocompleteItem(item) ? item.piMentionsIssue.row.issue.title : undefined) ??
 				lookupIssue(issueNumber)?.title ??
 				item.label.replace(/^#\d+\s+(\[[^\]]*\]\s+)?/, "").trim();
 			const reference = `[#${issueNumber} - ${issueTitle}]`;
@@ -985,17 +1328,55 @@ function createIssueMentionSpec(
  * setting; a future `autocompleteMaxVisible` in settings.json would not apply
  * while this editor is installed.
  */
+type RuntimeAutocompleteList = {
+	getSelectedItem?(): AutocompleteItem | null | undefined;
+	layout?: {
+		truncatePrimary?: (context: {
+			text: string;
+			maxWidth: number;
+			item: AutocompleteItem;
+		}) => string;
+	};
+};
+
 class MentionsEditor extends CustomEditor {
 	/** Fired after each keystroke so the extension can refresh its hint. */
 	onSelectionMaybeChanged?: () => void;
 
+	private runtimeAutocompleteList(): RuntimeAutocompleteList | undefined {
+		return (this as unknown as { autocompleteList?: RuntimeAutocompleteList }).autocompleteList;
+	}
+
 	/** The popup's highlighted row, or undefined when no popup is open. */
 	getHighlightedItem(): AutocompleteItem | undefined {
 		if (!this.isShowingAutocomplete()) return undefined;
-		const self = this as unknown as {
-			autocompleteList?: { getSelectedItem(): AutocompleteItem | undefined };
-		};
-		return self.autocompleteList?.getSelectedItem();
+		return this.runtimeAutocompleteList()?.getSelectedItem?.() ?? undefined;
+	}
+
+	override render(width: number): string[] {
+		// SelectList knows the true width only during render. Install its supported
+		// truncation callback through the runtime-visible list object so issue rows
+		// can share that width across columns. If Pi changes this private bridge,
+		// the preformatted capped label remains a safe fallback.
+		try {
+			const list = this.runtimeAutocompleteList();
+			const selected = list?.getSelectedItem?.();
+			if (list && isIssueAutocompleteItem(selected)) {
+				list.layout ??= {};
+				list.layout.truncatePrimary = ({ text, maxWidth, item }) => {
+					if (!isIssueAutocompleteItem(item)) return truncateToWidth(text, maxWidth, "");
+					return formatIssueRow(
+						item.piMentionsIssue.row,
+						item.piMentionsIssue.list,
+						maxWidth,
+					);
+				};
+			}
+		} catch {
+			// Private runtime integration is best-effort; ordinary SelectList
+			// truncation still guarantees a bounded row.
+		}
+		return super.render(width);
 	}
 
 	override handleInput(data: string): void {

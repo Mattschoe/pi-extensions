@@ -33,13 +33,15 @@ const piRequire = createRequire(join(PI_DIR, "package.json"));
 const jitiStaticFile = join(PI_DIR, "node_modules", "jiti", "lib", "jiti-static.mjs");
 const { createJiti } = await import(pathToFileURL(jitiStaticFile).href);
 
+const TUI_FILE = piRequire.resolve("@earendil-works/pi-tui");
 const jiti = createJiti(import.meta.url, {
   moduleCache: false,
   alias: {
     "@earendil-works/pi-coding-agent": join(PI_DIR, "dist", "index.js"),
-    "@earendil-works/pi-tui": piRequire.resolve("@earendil-works/pi-tui"),
+    "@earendil-works/pi-tui": TUI_FILE,
   },
 });
+const { visibleWidth } = await import(pathToFileURL(TUI_FILE).href);
 
 // ---------------------------------------------------------------------------
 // Fake pi + ctx
@@ -124,6 +126,20 @@ const ISSUES = [
       { title: "UI polish", status: { name: "Todo" } },
       { title: "Q4 launch", status: null },
       { title: "UI polish", status: { name: "Duplicate must not display" } },
+    ],
+  },
+  {
+    number: 416,
+    title:
+      "Document the exceptionally long responsive issue autocomplete layout across narrow terminals",
+    assignees: [{ login: "averylongusername" }, { login: "anotherlongusername" }],
+    labels: [
+      { name: "customer-reported-regression", color: "5319e7" },
+      { name: "implementation-in-progress界面", color: "0052cc" },
+    ],
+    projectItems: [
+      { title: "Long-running release roadmap", status: { name: "In progress" } },
+      { title: "跨平台 cross-platform terminal polish", status: { name: "Todo" } },
     ],
   },
 ];
@@ -271,6 +287,38 @@ const suggest = (provider, text) =>
   provider.getSuggestions([text], 0, text.length, { signal: new AbortController().signal });
 
 const flushAsync = () => new Promise((resolve) => setTimeout(resolve, 0));
+const stripAnsi = (text) => text.replace(/\x1b\[[0-9;]*m/g, "");
+const identity = (text) => text;
+const EDITOR_THEME = {
+  borderColor: identity,
+  selectList: {
+    selectedPrefix: identity,
+    selectedText: identity,
+    description: identity,
+    scrollInfo: identity,
+    noMatch: identity,
+  },
+};
+
+async function renderIssuePopup(ctx, provider, width) {
+  const tui = { terminal: { rows: 40 }, requestRender() {} };
+  const keybindings = { matches: () => false };
+  const editor = ctx.ui.editorFactories[0](tui, EDITOR_THEME, keybindings);
+  editor.setAutocompleteProvider(provider);
+  editor.setText("fix ");
+  editor.handleInput("#");
+  // `#` is one of pi-tui's attachment-style triggers and is debounced by 20ms.
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  await flushAsync();
+  const rows = editor
+    .render(width)
+    .map(stripAnsi)
+    .filter((line) => /#(?:7|412|415|416)\b/.test(line));
+  // Do not leave the extension's globally tracked editor with a highlighted
+  // issue; later alt+g tests must exercise references in their own prompts.
+  editor.handleInput("\x1b");
+  return rows;
+}
 
 // ---------------------------------------------------------------------------
 // Assertions
@@ -683,6 +731,7 @@ check("rows carry the issue number", values(allIssues)[0] === "#7");
 const unassignedLabel = allIssues.items.find((item) => item.value === "#7")?.label;
 const multiAssigneeLabel = allIssues.items.find((item) => item.value === "#412")?.label;
 const overflowLabel = allIssues.items.find((item) => item.value === "#415")?.label;
+const longLabel = allIssues.items.find((item) => item.value === "#416")?.label;
 const overflowTag = overflowLabel?.match(/\[[^\]]+\]/)?.[0];
 const assigneeTags = allIssues.items
   .map((item) => item.label.match(/\[[^\]]+\]/)?.[0])
@@ -702,8 +751,8 @@ check(
 );
 check(
   "rows show labels before bracketed project membership",
-  has(multiAssigneeLabel, ") [Release roadmap]") &&
-    has(overflowLabel, "(accessibility) [UI polish] [Q4 launch]") &&
+  /\)\s+\[Release roadmap\]/.test(multiAssigneeLabel ?? "") &&
+    /\(accessibility\)\s+\[UI polish\] \[Q4 launch\]/.test(overflowLabel ?? "") &&
     overflowLabel?.match(/UI polish/g)?.length === 1,
   overflowLabel,
 );
@@ -726,15 +775,91 @@ check(
 );
 check(
   "overflowing assignee tags are capped with an ellipsis",
-  overflowTag?.length === 20 && overflowTag.includes("…") && overflowTag.endsWith("]"),
+  visibleWidth(overflowTag ?? "") === 20 && overflowTag?.includes("…") && overflowTag.endsWith("]"),
   overflowTag,
 );
 check(
-  "every assignee tag is at most 20 characters",
-  assigneeTags.length === ISSUES.length && assigneeTags.every((tag) => tag.length <= 20),
+  "every assignee tag is at most 20 terminal cells",
+  assigneeTags.length === ISSUES.length && assigneeTags.every((tag) => visibleWidth(tag) <= 20),
   assigneeTags,
 );
+const plainLongLabel = stripAnsi(longLabel ?? "");
+const cappedLongTitle = plainLongLabel
+  .slice(plainLongLabel.indexOf("]") + 1, plainLongLabel.indexOf("("))
+  .trim();
+const cappedLongLabels = plainLongLabel.match(/\(([^)]*)\)/)?.[1].split(", ") ?? [];
+const cappedLongProjects = [...plainLongLabel.matchAll(/\[([^\]]*)\]/g)].slice(1).map((match) => match[0]);
+check(
+  "natural rows apply the balanced per-type caps",
+  visibleWidth(cappedLongTitle) === 60 &&
+    cappedLongTitle.endsWith("…") &&
+    cappedLongLabels.length === 2 &&
+    cappedLongLabels.every((label) => visibleWidth(label) === 20 && label.endsWith("…")) &&
+    cappedLongProjects.length === 2 &&
+    cappedLongProjects.every((project) => visibleWidth(project) === 24 && project.includes("…")),
+  plainLongLabel,
+);
 check("rows no longer show [open]", allIssues.items.every((item) => !has(item.label, "[open]")));
+
+const wideRows = await renderIssuePopup(ctx, issueProvider, 220);
+const wideRow = (number) => wideRows.find((line) => line.includes(`#${number}`)) ?? "";
+const wideTitleStarts = [
+  wideRow(7).indexOf("Flaky retry"),
+  wideRow(412).indexOf("Login crashes"),
+  wideRow(415).indexOf("Dark mode contrast"),
+  wideRow(416).indexOf("Document the"),
+];
+const wideLabelStarts = [wideRow(412).indexOf("("), wideRow(415).indexOf("("), wideRow(416).indexOf("(")];
+const wideProjectEnds = [412, 415, 416].map((number) => {
+  const row = wideRow(number);
+  return visibleWidth(row.slice(0, row.lastIndexOf("]") + 1));
+});
+check(
+  "wide rows use aligned assignee, title, and label columns",
+  wideRows.length === ISSUES.length &&
+    new Set(wideRows.map((line) => line.indexOf("["))).size === 1 &&
+    new Set(wideTitleStarts).size === 1 &&
+    new Set(wideLabelStarts).size === 1,
+  JSON.stringify(wideRows),
+);
+check(
+  "project blocks are anchored to one right edge",
+  new Set(wideProjectEnds).size === 1,
+  JSON.stringify(wideProjectEnds),
+);
+
+const mediumRows = await renderIssuePopup(ctx, issueProvider, 80);
+const mediumLong = mediumRows.find((line) => line.includes("#416")) ?? "";
+const mediumLabelGroup = mediumLong.match(/\(([^)]*)\)/)?.[1].split(", ") ?? [];
+const mediumProjects = [...mediumLong.matchAll(/\[([^\]]*)\]/g)].slice(1).map((match) => match[1]);
+const mediumAssigneeEnd = mediumLong.indexOf("]") + 1;
+const mediumTitleEnd = mediumLong.indexOf("(");
+const mediumTitle = mediumLong.slice(mediumAssigneeEnd, mediumTitleEnd).trim();
+check(
+  "medium widths share truncation across every flexible element",
+  mediumLong.match(/\[[^\]]*…\]/) != null &&
+    mediumTitle.endsWith("…") &&
+    mediumLabelGroup.length === 2 &&
+    mediumLabelGroup.every((label) => label.endsWith("…")) &&
+    mediumProjects.length === 2 &&
+    mediumProjects.every((project) => project.endsWith("…")),
+  mediumLong,
+);
+check(
+  "responsive popup rows never exceed the render width",
+  mediumRows.every((line) => visibleWidth(line) <= 80),
+  mediumRows.map(visibleWidth),
+);
+
+const extremeRows = await renderIssuePopup(ctx, issueProvider, 24);
+const extremeLong = extremeRows.find((line) => line.includes("#416")) ?? "";
+check(
+  "extreme widths drop projects before labels",
+  has(extremeLong, "(…, …)") &&
+    [...extremeLong.matchAll(/\[[^\]]*\]/g)].length === 1 &&
+    visibleWidth(extremeLong) <= 24,
+  extremeLong,
+);
 
 const issueListCall = pi.execCalls.find(
   (call) => call.cmd === "gh" && call.args[0] === "issue" && call.args[1] === "list",
@@ -751,7 +876,7 @@ check(
 );
 
 const numeric = await suggest(issueProvider, "fix #41");
-check("a numeric query prefix-matches", values(numeric).join(",") === "#412,#415", values(numeric));
+check("a numeric query prefix-matches", values(numeric).join(",") === "#412,#415,#416", values(numeric));
 
 const fuzzy = await suggest(issueProvider, "fix #contrast");
 check("a text query fuzzy-matches the title", values(fuzzy).includes("#415"), values(fuzzy));
@@ -766,6 +891,15 @@ check(
 );
 check("cursor lands after the reference", inserted.cursorCol === inserted.lines[0].length);
 check("styled metadata is not inserted into the reference", !inserted.lines[0].includes("\x1b"));
+
+const longItem = allIssues.items.find((item) => item.value === "#416");
+const insertedLong = issueProvider.applyCompletion(["fix #416"], 0, 8, longItem, "#416");
+check(
+  "a truncated row inserts its complete original title",
+  insertedLong.lines[0] ===
+    "fix [#416 - Document the exceptionally long responsive issue autocomplete layout across narrow terminals]",
+  insertedLong.lines[0],
+);
 
 const pi256 = makeFakePi(ghWorking());
 factory(pi256);

@@ -7,8 +7,13 @@ before the model sees them.
 Adds the ability to `@mention` a lot of different Git and Github items that is useful for context in specific tasks.
 More specifically you can
 - `#<issue_number>` to inject a Github Issue and immediately begin implementing.
-  The autocomplete rows show assignees, labels in their GitHub colors as `(label, label)`,
-  and Project membership as `[Project]` after the labels.
+  Autocomplete uses aligned columns for the issue number, assignee, title, labels, and
+  Project membership. Labels retain their GitHub colors as `(label, label)`, while projects
+  render as `[Project]` in a column anchored to the right edge.
+  Long values have balanced caps (assignee 20 cells, title 60, each label 20, each project 24).
+  When the terminal narrows, the available space is shared across columns and every affected
+  value gets its own end ellipsis instead of the right side of the row being clipped wholesale.
+  At extremely narrow widths projects, then labels, are omitted to preserve the core issue data.
   If Project metadata is unavailable (for example, without `read:project` access), issue and
   label completion still works. You can open the selected issue in the browser with `alt+g`.
 - `@<git_hash>` to inject a whole commit, useful for giving context for fixing or adding features.
