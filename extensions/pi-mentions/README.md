@@ -65,14 +65,16 @@ The default looks like so:
 
 ## Examples
 ### GitHub issues
-<img width="454" height="126" alt="image" src="https://github.com/user-attachments/assets/31abd260-6384-434c-9b66-8db76025b441" />
+<img width="944" height="118" alt="590a98b5-4efe-4a88-bfa2-a7166304c361" src="https://github.com/user-attachments/assets/73f2d2a2-d495-49c4-9782-43bd0cea302f" />
 
-<img width="1623" height="262" alt="image" src="https://github.com/user-attachments/assets/9473aca5-9736-4b72-aea0-a8a90a2b9407" />
+### GitHub Pull-Requests
+<img width="937" height="143" alt="705e24a5-c3c4-447b-8a4b-0243c151d27e" src="https://github.com/user-attachments/assets/76324dd9-1f38-4e86-a6cf-f547a3cc162b" />
+
+### GitHub Actions
+<img width="944" height="149" alt="fc8bbfd8-08b5-4119-92e1-9a1ac32b74f5" src="https://github.com/user-attachments/assets/0bce07d9-9be0-4ad9-8b84-63d9a4ffde54" />
 
 ### Git Commits
 <img width="1836" height="639" alt="image" src="https://github.com/user-attachments/assets/2b2af1a8-a349-4ed7-9352-ddd325cb4812" />
 
-
 ### Git Uncommited
 <img width="1228" height="291" alt="image" src="https://github.com/user-attachments/assets/6f9f2f39-7b4d-4793-b8fa-627320c432cd" />
-
