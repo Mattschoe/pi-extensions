@@ -6,16 +6,25 @@ before the model sees them.
 ## What it does
 Adds the ability to `@mention` a lot of different Git and Github items that is useful for context in specific tasks.
 More specifically you can
-- `#<issue_number>` to inject a Github Issue and immediately begin implementing.
-  Autocomplete uses aligned columns for the issue number, assignee, title, labels, and
-  Project membership. Labels retain their GitHub colors as `(label, label)`, while projects
-  render as `[Project]` in a column anchored to the right edge.
-  Long values have balanced caps (assignee 20 cells, title 60, each label 20, each project 24).
+- `#<number>` to inject a GitHub issue or pull request. Open issues and PRs share one
+  autocomplete list, sorted by number, with no extra type marker. The existing people column
+  shows assignees for issues and reviewers for PRs; labels and Project membership use the same
+  aligned, responsive columns for both. Labels retain their GitHub colors as `(label, label)`,
+  while projects render as `[Project]` in a column anchored to the right edge.
+  Long values have balanced caps (people 20 cells, title 60, each label 20, each project 24).
   When the terminal narrows, the available space is shared across columns and every affected
   value gets its own end ellipsis instead of the right side of the row being clipped wholesale.
-  At extremely narrow widths projects, then labels, are omitted to preserve the core issue data.
-  If Project metadata is unavailable (for example, without `read:project` access), issue and
-  label completion still works. You can open the selected issue in the browser with `alt+g`.
+  At extremely narrow widths projects, then labels, are omitted to preserve the core item data.
+  If Project metadata is unavailable (for example, without `read:project` access), completion
+  still works with reviewers/assignees and labels. Use `alt+g` to open the selected or referenced
+  item in the browser.
+
+  Issue references inject the body and comment thread. Pull request references inject the title,
+  body, metadata, general comments, review summaries, inline review conversations, and a bounded
+  changed-file summary. Patches and complete source files are deliberately left out; the agent can
+  inspect them through its existing Git and GitHub capabilities when the surrounding request needs
+  them. Large semantic PRs are summarized by changed area and churn, while rename-heavy PRs show
+  grouped and representative renames rather than dumping every path.
 - `@<git_hash>` to inject a whole commit, useful for giving context for fixing or adding features.
 - `@uncommited` to inject all current uncommited changes
 
@@ -34,8 +43,8 @@ but is unoptional and the extension can be used without the GitHub features.
 
 ## Config
 
-Optional. The defaults inject everything, so you only need a config file if an issue
-is bigger than you want in context.
+Optional. The defaults inject every issue/PR conversation, so you only need a config file if a
+GitHub item is bigger than you want in context.
 
 - **Project scope:** `.pi/mentions.json`
 - **Global scope:** `~/.pi/mentions.json` or `~/.pi/agent/mentions.json`
@@ -43,9 +52,9 @@ is bigger than you want in context.
 The default looks like so:
 ```jsonc
 {
-  "includeComments": true,   // inject the issue's comment thread, not just the body
-  "maxIssueChars": 0,        // truncate the issue body past this; 0 = no truncation
-  "maxComments": 0,          // keep at most this many comments; 0 = all of them
+  "includeComments": true,   // inject issue comments and PR conversations/reviews
+  "maxIssueChars": 0,        // truncate an issue or PR body past this; 0 = no truncation
+  "maxComments": 0,          // keep at most this many entries per conversation/thread; 0 = all
   "dropComments": "middle",  // when over maxComments: "oldest" | "middle" | "newest"
   "keepBots": true,          // keep comments from *[bot] authors
   "keepMinimized": false     // keep comments GitHub hides (spam / off-topic / abuse)
