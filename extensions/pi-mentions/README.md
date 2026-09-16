@@ -6,20 +6,8 @@ before the model sees them.
 ## What it does
 Adds the ability to `@mention` a lot of different Git and Github items that is useful for context in specific tasks.
 More specifically you can
-- `#<number>` to inject a GitHub issue or pull request. Open issues and PRs share one
-  autocomplete list, sorted by number with the smallest first, with no extra type marker. The existing people column
-  shows assignees for issues and reviewers for PRs; labels and Project membership use the same
-  aligned, responsive columns for both. Labels retain their GitHub colors as `(label, label)`,
-  while projects render as `[Project]` in a column anchored to the right edge.
-  Long values have balanced caps (people 20 cells, title 60, each label 20, each project 24).
-  When the terminal narrows, the available space is shared across columns and every affected
-  value gets its own end ellipsis instead of the right side of the row being clipped wholesale.
-  At extremely narrow widths projects, then labels, are omitted to preserve the core item data.
-  If Project metadata is unavailable (for example, without `read:project` access), completion
-  still works with reviewers/assignees and labels. Use `alt+g` to open the selected or referenced
-  item in the browser.
-
-  Issue references inject the body and comment thread. Pull request references inject the title,
+- `#<number>` to inject a GitHub issue or pull request. Use `alt+g` to open the selected or referenced
+  item in the browser. **Issue references** inject the body and comment thread. ****Pull request references** inject the title,
   body, metadata, general comments, review summaries, inline review conversations, and a bounded
   changed-file summary. Patches and complete source files are deliberately left out; the agent can
   inspect them through its existing Git and GitHub capabilities when the surrounding request needs
@@ -32,7 +20,6 @@ More specifically you can
   YAML paths are searchable. Active workflows that have never run and disabled workflows are
   omitted.
 
-  Selecting a workflow inserts a stable reference such as `[run #29691354984 - release-please]`.
   The referenced run injects metadata plus job and step conclusions. Diagnostic failures also
   inject failed-step logs, preserving the head and tail under a configurable 100 KB default cap.
   The context includes exact `gh run view` commands for obtaining complete run or job logs. Expired
