@@ -1,7 +1,7 @@
 {
   "name": "pi-mentions",
-  "version": "1.0.1",
-  "description": "Typed references in a Pi prompt that expand into real context: @uncommitted and @<hash> inject git state and commit contents, # autocompletes GitHub issues and injects their bodies and comment threads.",
+  "version": "1.1.0",
+  "description": "Typed references that expand into Git state, commits, GitHub issues, pull requests, and GitHub Actions runs with failed-step logs.",
   "type": "module",
   "license": "BSD-3-Clause",
   "author": "Matthias Schoenning Nielsen",
@@ -24,7 +24,10 @@
     "diff",
     "commit",
     "github",
+    "github-actions",
     "issues",
+    "pull-requests",
+    "reviews",
     "autocomplete",
     "mentions"
   ],
