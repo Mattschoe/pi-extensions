@@ -176,7 +176,7 @@ const PULL_REQUESTS = [
   },
 ];
 
-const ALL_ITEMS = [...ISSUES, ...PULL_REQUESTS].sort((a, b) => b.number - a.number);
+const ALL_ITEMS = [...ISSUES, ...PULL_REQUESTS].sort((a, b) => a.number - b.number);
 
 const comment = (login, body, { at = "2026-03-01T10:00:00Z", assoc = "NONE", hidden } = {}) => ({
   author: login === null ? null : { login },
@@ -899,8 +899,8 @@ await flushAsync();
 await piMany.shortcuts.get("alt+g").handler(manyCtx);
 const manyOptions = manyCtx.ui.selectPrompts[0]?.options ?? [];
 check(
-  "the 100-item cap is applied after merging and descending sort",
-  manyOptions.length === 100 && has(manyOptions[0], "#160") && has(manyOptions[99], "#61"),
+  "the 100-item cap is applied after merging and ascending sort",
+  manyOptions.length === 100 && has(manyOptions[0], "#1") && has(manyOptions[99], "#100"),
   `${manyOptions.length}: ${manyOptions[0]} … ${manyOptions[99]}`,
 );
 
@@ -921,8 +921,8 @@ const issueProvider = ctx.ui.providerFactories[1](baseProvider);
 const allIssues = await suggest(issueProvider, "fix #");
 check("bare # lists open issues and PRs", values(allIssues).length === ALL_ITEMS.length, values(allIssues));
 check(
-  "the unified list is sorted by descending repository number",
-  values(allIssues).join(",") === "#418,#417,#416,#415,#414,#412,#7",
+  "the unified list is sorted by ascending repository number",
+  values(allIssues).join(",") === "#7,#412,#414,#415,#416,#417,#418",
   values(allIssues),
 );
 
@@ -1013,14 +1013,14 @@ check("rows no longer show [open]", allIssues.items.every((item) => !has(item.la
 const wideRows = await renderIssuePopup(ctx, issueProvider, 220);
 const wideRow = (number) => wideRows.find((line) => line.includes(`#${number}`)) ?? "";
 const wideTitleStarts = [
-  wideRow(418).indexOf("Move legacy"),
-  wideRow(417).indexOf("Refactor request"),
-  wideRow(416).indexOf("Document the"),
-  wideRow(415).indexOf("Dark mode contrast"),
+  wideRow(7).indexOf("Flaky retry"),
+  wideRow(412).indexOf("Login crashes"),
   wideRow(414).indexOf("Refactor session"),
+  wideRow(415).indexOf("Dark mode contrast"),
+  wideRow(416).indexOf("Document the"),
 ];
-const wideLabelStarts = [418, 417, 416, 415, 414].map((number) => wideRow(number).indexOf("("));
-const wideProjectEnds = [418, 416, 415, 414].map((number) => {
+const wideLabelStarts = [412, 414, 415, 416].map((number) => wideRow(number).indexOf("("));
+const wideProjectEnds = [412, 414, 415, 416].map((number) => {
   const row = wideRow(number);
   return visibleWidth(row.slice(0, row.lastIndexOf("]") + 1));
 });
@@ -1097,7 +1097,7 @@ check(
 const numeric = await suggest(issueProvider, "fix #41");
 check(
   "a numeric query prefix-matches across issues and PRs",
-  values(numeric).join(",") === "#418,#417,#416,#415,#414,#412",
+  values(numeric).join(",") === "#412,#414,#415,#416,#417,#418",
   values(numeric),
 );
 

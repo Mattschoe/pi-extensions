@@ -2278,7 +2278,7 @@ export default function (pi: ExtensionAPI): void {
 			]);
 			if (issues === undefined && pullRequests === undefined) return undefined;
 			loadedItems = [...(issues ?? []), ...(pullRequests ?? [])]
-				.sort((left, right) => right.number - left.number)
+				.sort((left, right) => left.number - right.number)
 				.slice(0, MAX_GITHUB_ITEMS);
 			if (!loadSuccessShown && loadedItems.length > 0) {
 				loadSuccessShown = true;

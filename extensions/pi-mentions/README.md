@@ -7,7 +7,7 @@ before the model sees them.
 Adds the ability to `@mention` a lot of different Git and Github items that is useful for context in specific tasks.
 More specifically you can
 - `#<number>` to inject a GitHub issue or pull request. Open issues and PRs share one
-  autocomplete list, sorted by number, with no extra type marker. The existing people column
+  autocomplete list, sorted by number with the smallest first, with no extra type marker. The existing people column
   shows assignees for issues and reviewers for PRs; labels and Project membership use the same
   aligned, responsive columns for both. Labels retain their GitHub colors as `(label, label)`,
   while projects render as `[Project]` in a column anchored to the right edge.
