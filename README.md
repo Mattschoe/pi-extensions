@@ -6,7 +6,7 @@ A collection of the extensions i have made for the coding agent [Pi](https://pi.
 | Extension | What it does |
 | --------- | ------------ |
 | [Branch Context](#branch-context) | Keeps LLM work scoped to the current git branch: injects a branch scope context file <br>(`.pi/branches/<branch>.md`) into the prompt and gates out-of-scope implementation work |
-| [GitHub- & Git Mentions](#github---git-mentions) | Adds the ability to `@mention` a lot of different Git and Github items, such as: <br> GH issues, whole commits, and uncommited work |
+| [GitHub- & Git Mentions](#github---git-mentions) | Adds the ability to `@mention` a lot of different Git and Github items, such as: <br> Issues, PR's, whole commits, uncommited work, GH Actions |
 | [Plan & Auto-accept Mode](#plan--auto-accept-mode) | A classic planning & auto-accept mode you know and love from Claude Code. <br> This is however with a bunch of extra features added on top, features such as: <br> - Improved plan document structure <br> - `Implement in new chat` option <br> - Proper naming of plan files <br> - `/plans` browser <br> - Visual Execution Tracking (TODO boxes) <br> - Plain-language reasons in bash approval dialogs |
 | [Oneline Tools](#oneline-tools) | Renders `read`, `grep`, `find`, `ls`, `bash` as one dim line instead of a bordered box |
 | [Auto Name Session](#auto-name-session) | Names an unnamed session from your first prompt |
@@ -37,10 +37,12 @@ I often found myself constantly having to explain to the agent what this branch 
 #### What it does
 Adds the ability to `@mention` a lot of different Git and Github items that is useful for context in specific tasks.
 More specifically you can
-- `#<issue_number>` to inject a Github Issue and immediately begin implementing. 
-  If you check the commit you can open it in the browser with `alt+g`.
+- `#<issue_number>` to inject a GitHub Issue and immediately begin implementing. 
+  You can also open it in the browser with `alt+g`.
+- `#<pr_number>` to inject a GitHub Pull-request and immediately improve or revie the PR.
 - `@<git_hash>` to inject a whole commit, useful for giving context for fixing or adding features.
 - `@uncommited` to inject all current uncommited changes
+- `#<GH_workflow_name` to inject a reference to a GitHub workflow.
 
 #### Reason
 A lot of my work starts with "see issue XX on Github" or "Look at commit XXXXX, we need to modify XX to do XX" or
