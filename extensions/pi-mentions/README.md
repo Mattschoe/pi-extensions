@@ -25,6 +25,20 @@ More specifically you can
   inspect them through its existing Git and GitHub capabilities when the surrounding request needs
   them. Large semantic PRs are summarized by changed area and churn, while rename-heavy PRs show
   grouped and representative renames rather than dumping every path.
+- GitHub Actions runs also appear under `#`, always below issue and pull request matches. The latest
+  run across all branches for every active workflow is shown, newest workflow run first. Its status
+  occupies the people column (`[Success]`, `[Failure]`, `[Running]`, etc.) with only the status text
+  semantically colored, while its branch is right-aligned in the Project column. Workflow names and
+  YAML paths are searchable. Active workflows that have never run and disabled workflows are
+  omitted.
+
+  Selecting a workflow inserts a stable reference such as `[run #29691354984 - release-please]`.
+  The referenced run injects metadata plus job and step conclusions. Diagnostic failures also
+  inject failed-step logs, preserving the head and tail under a configurable 100 KB default cap.
+  The context includes exact `gh run view` commands for obtaining complete run or job logs. Expired
+  or unavailable logs do not discard the remaining run metadata. Workflow results are cached for
+  30 seconds; stale rows display immediately while one background refresh prepares the next popup.
+  `alt+g` opens the exact Actions run just as it opens issues and pull requests.
 - `@<git_hash>` to inject a whole commit, useful for giving context for fixing or adding features.
 - `@uncommited` to inject all current uncommited changes
 
@@ -39,7 +53,7 @@ this extension avoid the repetiveness and just focus on implementing while ensur
 pi install npm:pi-mentions
 ```
 Requires `git` for the `@` half. The `#` half additionally requires [`gh`](https://cli.github.com/),
-but is unoptional and the extension can be used without the GitHub features.
+but it is optional and the extension can be used without the GitHub features.
 
 ## Config
 
@@ -57,7 +71,8 @@ The default looks like so:
   "maxComments": 0,          // keep at most this many entries per conversation/thread; 0 = all
   "dropComments": "middle",  // when over maxComments: "oldest" | "middle" | "newest"
   "keepBots": true,          // keep comments from *[bot] authors
-  "keepMinimized": false     // keep comments GitHub hides (spam / off-topic / abuse)
+  "keepMinimized": false,    // keep comments GitHub hides (spam / off-topic / abuse)
+  "maxWorkflowLogBytes": 100000 // failed-step logs per Actions run; 0 = no cap
 }
 ```
 
