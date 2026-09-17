@@ -14,7 +14,7 @@
 //      PI_DIR=/path/to/pi-coding-agent node test/smoke.mjs
 
 import { createRequire } from "node:module";
-import { join, dirname } from "node:path";
+import { join, dirname, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
 const PI_DIR =
@@ -63,6 +63,7 @@ const theme = { fg: (_style, text) => text, bold: (t) => t };
 const textResult = (text, isError = false) => ({ content: [{ type: "text", text }], isError });
 const render = (component) => component.render(200).map((l) => l.trimEnd());
 const renderContext = (args = {}, state = {}) => ({ args, state });
+const cwdRelative = (p) => relative(process.cwd(), resolve(process.cwd(), p)) || ".";
 
 // Pi keeps call and result renderers as sibling slots in one tool row. Drive
 // both against the same state to catch accidental pending+completed duplicates.
@@ -121,10 +122,10 @@ const read = tools.get("read");
 const threeLines = textResult("l1\nl2\nl3");
 
 const readRow = render(read.renderResult(threeLines, { expanded: false }, theme, {
-  args: { path: join(process.env.HOME ?? "/home", "project/src/config.ts") },
+  args: { path: join(process.cwd(), "src/config.ts") },
 }));
 check("a collapsed row is one line", readRow.length === 1, JSON.stringify(readRow));
-check("home is shortened to ~", readRow[0].startsWith("read ~/project/src/config.ts"), readRow[0]);
+check("an in-project absolute path is relative to the working directory", readRow[0].startsWith("read src/config.ts"), readRow[0]);
 check("with the line count", readRow[0].endsWith("(3 lines)"), readRow[0]);
 
 const composedRows = [
@@ -170,10 +171,19 @@ check(
   JSON.stringify(groupedLines),
 );
 
-const relative = render(read.renderResult(threeLines, { expanded: false }, theme, {
+const relativePath = render(read.renderResult(threeLines, { expanded: false }, theme, {
   args: { path: "src/config.ts" },
 }));
-check("a relative path is absolutised", relative[0].includes("/src/config.ts"), relative[0]);
+check(
+  "a relative path remains relative",
+  relativePath[0].includes("read src/config.ts"),
+  relativePath[0],
+);
+
+const parent = render(read.renderResult(threeLines, { expanded: false }, theme, {
+  args: { path: join(process.cwd(), "../config.ts") },
+}));
+check("a path outside the working directory uses ..", parent[0].includes("read ../config.ts"), parent[0]);
 
 const grepRow = render(
   tools.get("grep").renderResult(threeLines, { expanded: false }, theme, {
@@ -185,7 +195,7 @@ check("grep counts matches", grepRow[0] === 'grep "ConfigSchema" (3 matches)', g
 const lsRow = render(
   tools.get("ls").renderResult(threeLines, { expanded: false }, theme, { args: { path: "/etc" } }),
 );
-check("ls counts entries", lsRow[0] === "ls /etc (3 entries)", lsRow[0]);
+check("ls counts entries", lsRow[0] === `ls ${cwdRelative("/etc")} (3 entries)`, lsRow[0]);
 
 const findRow = render(
   tools.get("find").renderResult(threeLines, { expanded: false }, theme, {
@@ -213,7 +223,11 @@ const errorRow = render(
   }),
 );
 check("an error row is still one line", errorRow.length === 1);
-check("and says error", errorRow[0] === "read /nope.ts — error (1 lines)", errorRow[0]);
+check(
+  "and says error",
+  errorRow[0] === `read ${cwdRelative("/nope.ts")} — error (1 lines)`,
+  errorRow[0],
+);
 
 // ---------------------------------------------------------------------------
 // Expanded rows — the regression this test exists for
@@ -224,7 +238,11 @@ const expanded = render(
   read.renderResult(threeLines, { expanded: true }, theme, { args: { path: "/tmp/x.ts" } }),
 );
 check("an expanded row is not empty", expanded.length > 0, JSON.stringify(expanded));
-check("it keeps the summary line first", expanded[0] === "read /tmp/x.ts (3 lines)", expanded[0]);
+check(
+  "it keeps the summary line first",
+  expanded[0] === `read ${cwdRelative("/tmp/x.ts")} (3 lines)`,
+  expanded[0],
+);
 check(
   "and carries the full output underneath",
   expanded.slice(1).join("\n") === "l1\nl2\nl3",
@@ -234,7 +252,7 @@ check(
 const composedExpanded = renderCompletedTool(read, { path: "/tmp/x.ts" }, threeLines, true);
 check(
   "an expanded composed row still hides the pending call",
-  composedExpanded.join("\n") === "read /tmp/x.ts (3 lines)\nl1\nl2\nl3",
+  composedExpanded.join("\n") === `read ${cwdRelative("/tmp/x.ts")} (3 lines)\nl1\nl2\nl3`,
   JSON.stringify(composedExpanded),
 );
 
@@ -263,7 +281,7 @@ check("an empty result expands to just the summary", empty.length === 1, JSON.st
 console.log("\n== call ==");
 const call = render(read.renderCall({ path: "/tmp/x.ts" }, theme, {}));
 check("the in-flight row is one line", call.length === 1);
-check("ending in an ellipsis", call[0] === "read /tmp/x.ts...", call[0]);
+check("ending in an ellipsis", call[0] === `read ${cwdRelative("/tmp/x.ts")}...`, call[0]);
 
 // ---------------------------------------------------------------------------
 // Summary

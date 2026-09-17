@@ -18,13 +18,11 @@ import {
   ToolExecutionComponent,
 } from "@earendil-works/pi-coding-agent";
 import { Container, Text, type Component } from "@earendil-works/pi-tui";
-import { homedir } from "os";
 import path from "path";
 import { Type, type TSchema } from "typebox";
 
 // ── helpers ─────────────────────────────────────────────────────────────────
 
-const HOME = homedir();
 const cwd = process.cwd();
 
 /**
@@ -166,9 +164,8 @@ function withOptionalBashReason<T extends ToolWithParameters>(tool: T) {
 }
 
 function compactPath(p: string): string {
-  const resolved = p.startsWith("/") ? p : path.resolve(cwd, p);
-  if (resolved.startsWith(HOME)) return "~" + resolved.slice(HOME.length);
-  return resolved;
+  const resolved = path.resolve(cwd, p);
+  return path.relative(cwd, resolved) || ".";
 }
 
 function textBlocks(content: unknown): string[] {

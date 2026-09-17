@@ -29,12 +29,12 @@ pi install npm:pi-oneline-tools
 
 **After:**
 ```
-read ~/project/src/config.ts (84 lines)
-read ~/project/src/types.ts (31 lines)
+read src/config.ts (84 lines)
+read src/types.ts (31 lines)
 
 grep "ConfigSchema" (12 matches)
 
-ls ~/project/src (23 entries)
+ls src (23 entries)
 
 npm test -- --watch=false... (140 lines)
 ```
