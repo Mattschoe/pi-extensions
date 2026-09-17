@@ -15,8 +15,9 @@ import {
   createLsTool,
   createGrepTool,
   createFindTool,
+  ToolExecutionComponent,
 } from "@earendil-works/pi-coding-agent";
-import { Text } from "@earendil-works/pi-tui";
+import { Container, Text, type Component } from "@earendil-works/pi-tui";
 import { homedir } from "os";
 import path from "path";
 import { Type, type TSchema } from "typebox";
@@ -38,6 +39,83 @@ type RenderContextLike = { state?: RowRenderState };
 type RowRenderState = { pending?: HideableText };
 
 type ToolWithParameters = { parameters: { properties?: Record<string, TSchema> } };
+type ContainerRender = (this: Container, width: number) => string[];
+type SpacingPatch = {
+  originalRender: ContainerRender;
+  patchedRender: ContainerRender;
+  users: number;
+};
+
+const ONE_LINE_TOOL_NAMES = new Set(["read", "grep", "find", "ls", "bash"]);
+const SPACING_PATCH = Symbol.for("pi-oneline-tools.spacing-patch");
+
+function oneLineToolName(component: Component): string | undefined {
+  if (!(component instanceof ToolExecutionComponent)) return undefined;
+  const name = (component as unknown as { toolName?: unknown }).toolName;
+  return typeof name === "string" && ONE_LINE_TOOL_NAMES.has(name) ? name : undefined;
+}
+
+/**
+ * Pi's self-rendering tool shell always prepends one blank line to every tool.
+ * Group adjacent one-line rows by removing that line when the previous visible
+ * sibling is the same tool. A different tool (or any visible non-tool content)
+ * keeps the normal separator.
+ *
+ * Container has no per-instance renderer hook, so this is a small, ref-counted
+ * prototype patch. Ref-counting keeps duplicate extension loads and /reload
+ * teardown safe.
+ */
+function installGroupedToolSpacing(): () => void {
+  const prototype = Container.prototype as Container & Record<symbol, unknown>;
+  let patch = prototype[SPACING_PATCH] as SpacingPatch | undefined;
+
+  if (!patch) {
+    const originalRender = Container.prototype.render as ContainerRender;
+    const patchedRender: ContainerRender = function (width) {
+      const lines: string[] = [];
+      let previousToolName: string | undefined;
+
+      for (const child of this.children) {
+        let childLines = child.render(width);
+        const toolName = oneLineToolName(child);
+
+        if (toolName && childLines.length > 0) {
+          if (toolName === previousToolName && childLines[0] === "") {
+            childLines = childLines.slice(1);
+          }
+          previousToolName = toolName;
+        } else if (childLines.length > 0) {
+          previousToolName = undefined;
+        }
+
+        lines.push(...childLines);
+      }
+
+      return lines;
+    };
+
+    patch = { originalRender, patchedRender, users: 0 };
+    Object.defineProperty(prototype, SPACING_PATCH, {
+      configurable: true,
+      value: patch,
+    });
+    Container.prototype.render = patchedRender;
+  }
+
+  patch.users++;
+  let installed = true;
+  return () => {
+    if (!installed) return;
+    installed = false;
+    patch.users--;
+    if (patch.users === 0) {
+      if (Container.prototype.render === patch.patchedRender) {
+        Container.prototype.render = patch.originalRender;
+      }
+      delete prototype[SPACING_PATCH];
+    }
+  };
+}
 
 /**
  * Pi renders the call and result as two sibling slots. Keep the pending call in
@@ -153,6 +231,9 @@ function renderRow(
 // ── wiring ──────────────────────────────────────────────────────────────────
 
 export default function (pi: ExtensionAPI) {
+  const restoreToolSpacing = installGroupedToolSpacing();
+  pi.on("session_shutdown", restoreToolSpacing);
+
   // ═══════════════════════════════════════════════════════════════════════════
   //  read — compact, no box
   // ═══════════════════════════════════════════════════════════════════════════

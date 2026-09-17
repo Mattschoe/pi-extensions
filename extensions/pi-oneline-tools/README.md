@@ -2,7 +2,8 @@
 
 ## What it does
 A [Pi](https://pi.dev/) extension that renders `read`, `grep`, `find`, `ls` and `bash` as one dim
-line each instead of a bordered box.
+line each instead of a bordered box. Consecutive calls of the same tool are grouped without blank
+lines; switching to a different tool keeps one blank separator.
 
 ## Reason
 Its incredibly annoying to see so much popup in the TUI when the agent is just reading files, 
@@ -29,8 +30,12 @@ pi install npm:pi-oneline-tools
 **After:**
 ```
 read ~/project/src/config.ts (84 lines)
+read ~/project/src/types.ts (31 lines)
+
 grep "ConfigSchema" (12 matches)
+
 ls ~/project/src (23 entries)
+
 npm test -- --watch=false... (140 lines)
 ```
 

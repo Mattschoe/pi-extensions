@@ -25,6 +25,11 @@ const EXT_FILE = join(HERE, "..", "extensions", "index.ts");
 const piRequire = createRequire(join(PI_DIR, "package.json"));
 const jitiStaticFile = join(PI_DIR, "node_modules", "jiti", "lib", "jiti-static.mjs");
 const { createJiti } = await import(pathToFileURL(jitiStaticFile).href);
+const { ToolExecutionComponent, initTheme } = await import(
+  pathToFileURL(join(PI_DIR, "dist", "index.js")).href
+);
+const { Container } = await import(pathToFileURL(piRequire.resolve("@earendil-works/pi-tui")).href);
+initTheme("dark", false);
 
 const jiti = createJiti(import.meta.url, {
   moduleCache: false,
@@ -78,7 +83,11 @@ const factory = await jiti.import(EXT_FILE, { default: true });
 check("default export is a function", typeof factory === "function");
 
 const tools = new Map();
-factory({ registerTool: (def) => tools.set(def.name, def) });
+const eventHandlers = new Map();
+factory({
+  registerTool: (def) => tools.set(def.name, def),
+  on: (event, handler) => eventHandlers.set(event, handler),
+});
 
 check(
   "registers the five lookup tools",
@@ -129,6 +138,36 @@ check(
   "completed tools hide their pending call row",
   composedRows.every((lines) => lines.length === 1),
   JSON.stringify(composedRows),
+);
+
+const makeCompletedComponent = (name, id, args) => {
+  const component = new ToolExecutionComponent(
+    name,
+    id,
+    args,
+    undefined,
+    tools.get(name),
+    { requestRender() {} },
+    process.cwd(),
+  );
+  component.updateResult({ ...threeLines, details: {}, isError: false });
+  return component;
+};
+const groupedTools = new Container();
+groupedTools.addChild(makeCompletedComponent("read", "read-1", { path: "/tmp/one.ts" }));
+groupedTools.addChild(makeCompletedComponent("read", "read-2", { path: "/tmp/two.ts" }));
+groupedTools.addChild(makeCompletedComponent("ls", "ls-1", { path: "/tmp" }));
+groupedTools.addChild(makeCompletedComponent("read", "read-3", { path: "/tmp/three.ts" }));
+const groupedLines = groupedTools.render(200);
+check(
+  "adjacent calls of the same tool have no blank line between them",
+  groupedLines.length === 7 && groupedLines[0] === "" && groupedLines[2] !== "",
+  JSON.stringify(groupedLines),
+);
+check(
+  "a different tool keeps one blank separator",
+  groupedLines[3] === "" && groupedLines[5] === "",
+  JSON.stringify(groupedLines),
 );
 
 const relative = render(read.renderResult(threeLines, { expanded: false }, theme, {
@@ -229,6 +268,14 @@ check("ending in an ellipsis", call[0] === "read /tmp/x.ts...", call[0]);
 // ---------------------------------------------------------------------------
 // Summary
 // ---------------------------------------------------------------------------
+
+eventHandlers.get("session_shutdown")?.();
+const restoredLines = groupedTools.render(200);
+check(
+  "session shutdown restores Pi's normal tool spacing",
+  restoredLines.length === 8 && restoredLines[2] === "",
+  JSON.stringify(restoredLines),
+);
 
 console.log(`\n${passed} passed, ${failures.length} failed`);
 if (failures.length > 0) {
