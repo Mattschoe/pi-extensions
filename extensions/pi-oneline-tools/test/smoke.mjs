@@ -4,11 +4,11 @@
 // definitions it registers, and drives their renderers directly. No real pi
 // instance required.
 //
-// Small on purpose: this is a rendering wrapper, and the only behaviour worth
-// pinning is that a collapsed row is exactly one line and an expanded one
-// carries the tool's full output. The expanded path is easy to get wrong — the
-// builtin tool definitions have no `renderResult` to delegate to, so an
-// expanded row that delegates renders nothing at all.
+// Small on purpose: this is a rendering wrapper, and the behaviour worth
+// pinning is that Pi's composed call+result row is exactly one line when
+// collapsed and carries the full output when expanded. Both paths are easy to
+// get wrong: visible call and result slots duplicate the row, while delegating
+// the result renders nothing because built-in definitions have no renderer.
 //
 // Run: node test/smoke.mjs   (from the package dir)
 //      PI_DIR=/path/to/pi-coding-agent node test/smoke.mjs
@@ -57,6 +57,17 @@ function check(name, condition, detail) {
 const theme = { fg: (_style, text) => text, bold: (t) => t };
 const textResult = (text, isError = false) => ({ content: [{ type: "text", text }], isError });
 const render = (component) => component.render(200).map((l) => l.trimEnd());
+const renderContext = (args = {}, state = {}) => ({ args, state });
+
+// Pi keeps call and result renderers as sibling slots in one tool row. Drive
+// both against the same state to catch accidental pending+completed duplicates.
+const renderCompletedTool = (tool, args, result, expanded = false) => {
+  const state = {};
+  const context = renderContext(args, state);
+  const callComponent = tool.renderCall(args, theme, context);
+  const resultComponent = tool.renderResult(result, { expanded, isPartial: false }, theme, context);
+  return [...render(callComponent), ...render(resultComponent)];
+};
 
 // ---------------------------------------------------------------------------
 // Load
@@ -106,6 +117,19 @@ const readRow = render(read.renderResult(threeLines, { expanded: false }, theme,
 check("a collapsed row is one line", readRow.length === 1, JSON.stringify(readRow));
 check("home is shortened to ~", readRow[0].startsWith("read ~/project/src/config.ts"), readRow[0]);
 check("with the line count", readRow[0].endsWith("(3 lines)"), readRow[0]);
+
+const composedRows = [
+  renderCompletedTool(read, { path: "/tmp/x.ts" }, threeLines),
+  renderCompletedTool(tools.get("grep"), { pattern: "ConfigSchema" }, threeLines),
+  renderCompletedTool(tools.get("find"), { pattern: "*.ts" }, threeLines),
+  renderCompletedTool(tools.get("ls"), { path: "/etc" }, threeLines),
+  renderCompletedTool(tools.get("bash"), { command: "printf test" }, threeLines),
+];
+check(
+  "completed tools hide their pending call row",
+  composedRows.every((lines) => lines.length === 1),
+  JSON.stringify(composedRows),
+);
 
 const relative = render(read.renderResult(threeLines, { expanded: false }, theme, {
   args: { path: "src/config.ts" },
@@ -166,6 +190,13 @@ check(
   "and carries the full output underneath",
   expanded.slice(1).join("\n") === "l1\nl2\nl3",
   JSON.stringify(expanded),
+);
+
+const composedExpanded = renderCompletedTool(read, { path: "/tmp/x.ts" }, threeLines, true);
+check(
+  "an expanded composed row still hides the pending call",
+  composedExpanded.join("\n") === "read /tmp/x.ts (3 lines)\nl1\nl2\nl3",
+  JSON.stringify(composedExpanded),
 );
 
 const expandedError = render(

@@ -34,8 +34,41 @@ const cwd = process.cwd();
 type RenderOptions = { expanded?: boolean; isPartial?: boolean };
 type ThemeLike = { fg(style: string, text: string): string };
 type ToolResultLike = { content?: unknown; isError?: boolean };
+type RenderContextLike = { state?: RowRenderState };
+type RowRenderState = { pending?: HideableText };
 
 type ToolWithParameters = { parameters: { properties?: Record<string, TSchema> } };
+
+/**
+ * Pi renders the call and result as two sibling slots. Keep the pending call in
+ * the tree so it is visible while the tool runs, then hide it as soon as the
+ * result slot renders. Otherwise completed tools show both `read path...` and
+ * `read path (N lines)`.
+ */
+class HideableText extends Text {
+  hidden = false;
+
+  override render(width: number): string[] {
+    return this.hidden ? [] : super.render(width);
+  }
+}
+
+function rowState(context: RenderContextLike): RowRenderState {
+  return (context.state ??= {});
+}
+
+function renderPendingRow(
+  summary: string,
+  theme: ThemeLike,
+  context: RenderContextLike,
+): HideableText {
+  const state = rowState(context);
+  const row = state.pending ?? new HideableText("", 0, 0);
+  row.hidden = false;
+  row.setText(theme.fg("dim", summary));
+  state.pending = row;
+  return row;
+}
 
 function withOptionalBashReason<T extends ToolWithParameters>(tool: T) {
   return {
@@ -107,7 +140,10 @@ function renderRow(
   result: ToolResultLike,
   options: RenderOptions,
   theme: ThemeLike,
+  context: RenderContextLike,
 ): Text {
+  const pending = rowState(context).pending;
+  if (pending) pending.hidden = true;
   const line = theme.fg(result.isError ? "error" : "dim", summary);
   if (!options.expanded) return new Text(line, 0, 0);
   const body = textBlocks(result.content).join("\n");
@@ -123,15 +159,15 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool({
     ...createReadTool(cwd),
     renderShell: "self",
-    renderCall(args, theme, _context) {
+    renderCall(args, theme, context) {
       const p = compactPath(String((args as Record<string, unknown>).path ?? "?"));
-      return new Text(theme.fg("dim", `read ${p}...`), 0, 0);
+      return renderPendingRow(`read ${p}...`, theme, context);
     },
     renderResult(result, options, theme, context) {
       const p = compactPath(arg(context, "path", "?"));
       const lines = countLines(result.content);
       const suffix = result.isError ? `— error (${lines} lines)` : `(${lines} lines)`;
-      return renderRow(`read ${p} ${suffix}`, result, options, theme);
+      return renderRow(`read ${p} ${suffix}`, result, options, theme, context);
     },
   });
 
@@ -141,15 +177,15 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool({
     ...createGrepTool(cwd),
     renderShell: "self",
-    renderCall(args, theme, _context) {
+    renderCall(args, theme, context) {
       const pattern = String((args as Record<string, unknown>).pattern ?? "?");
-      return new Text(theme.fg("dim", `grep "${pattern}"...`), 0, 0);
+      return renderPendingRow(`grep "${pattern}"...`, theme, context);
     },
     renderResult(result, options, theme, context) {
       const pattern = arg(context, "pattern", "?");
       const lines = countLines(result.content);
       const suffix = result.isError ? `— error (${lines} lines)` : `(${lines} matches)`;
-      return renderRow(`grep "${pattern}" ${suffix}`, result, options, theme);
+      return renderRow(`grep "${pattern}" ${suffix}`, result, options, theme, context);
     },
   });
 
@@ -159,15 +195,15 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool({
     ...createFindTool(cwd),
     renderShell: "self",
-    renderCall(args, theme, _context) {
+    renderCall(args, theme, context) {
       const pattern = String((args as Record<string, unknown>).pattern ?? "?");
-      return new Text(theme.fg("dim", `find "${pattern}"...`), 0, 0);
+      return renderPendingRow(`find "${pattern}"...`, theme, context);
     },
     renderResult(result, options, theme, context) {
       const pattern = arg(context, "pattern", "?");
       const lines = countLines(result.content);
       const suffix = result.isError ? `— error (${lines} lines)` : `(${lines} matches)`;
-      return renderRow(`find "${pattern}" ${suffix}`, result, options, theme);
+      return renderRow(`find "${pattern}" ${suffix}`, result, options, theme, context);
     },
   });
 
@@ -177,15 +213,15 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool({
     ...createLsTool(cwd),
     renderShell: "self",
-    renderCall(args, theme, _context) {
+    renderCall(args, theme, context) {
       const p = compactPath(String((args as Record<string, unknown>).path ?? "."));
-      return new Text(theme.fg("dim", `ls ${p}...`), 0, 0);
+      return renderPendingRow(`ls ${p}...`, theme, context);
     },
     renderResult(result, options, theme, context) {
       const p = compactPath(arg(context, "path", "."));
       const lines = countLines(result.content);
       const suffix = result.isError ? `— error (${lines} lines)` : `(${lines} entries)`;
-      return renderRow(`ls ${p} ${suffix}`, result, options, theme);
+      return renderRow(`ls ${p} ${suffix}`, result, options, theme, context);
     },
   });
 
@@ -199,15 +235,15 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool({
     ...withOptionalBashReason(createBashTool(cwd)),
     renderShell: "self",
-    renderCall(args, theme, _context) {
+    renderCall(args, theme, context) {
       const cmd = String((args as Record<string, unknown>).command ?? "bash");
-      return new Text(theme.fg("dim", `${shortCmd(cmd)}...`), 0, 0);
+      return renderPendingRow(`${shortCmd(cmd)}...`, theme, context);
     },
     renderResult(result, options, theme, context) {
       const cmd = arg(context, "command", "bash");
       const lines = countLines(result.content);
       const suffix = result.isError ? `— error (${lines} lines)` : `(${lines} lines)`;
-      return renderRow(`${shortCmd(cmd)} ${suffix}`, result, options, theme);
+      return renderRow(`${shortCmd(cmd)} ${suffix}`, result, options, theme, context);
     },
   });
 }
